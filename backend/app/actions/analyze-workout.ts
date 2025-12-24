@@ -1,7 +1,7 @@
 "use server";
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { buildContextAwarePrompt } from "@/lib/prompts/gemini-prompt";
+import { buildContextAwarePrompt } from "../../utils/prompts";
 import { updateAnalysisResult } from "@/lib/supabase/client";
 import type {
   WorkoutContext,
