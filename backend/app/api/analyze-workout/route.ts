@@ -5,6 +5,9 @@ import type {
   AnalyzeWorkoutResponse,
 } from "@/lib/types/biomechanics";
 
+// Next.js가 이 라우트를 동적으로 처리하도록 강제 (빌드 타임 정적 생성 방지)
+export const dynamic = "force-dynamic";
+
 /**
  * HTTP POST 엔드포인트: /api/analyze-workout
  * Flutter 앱에서 Motion Data와 Context를 받아 Gemini 분석 수행
@@ -79,21 +82,20 @@ function validateRequest(body: any): string | null {
     return "context is required";
   }
 
-  if (
-    !["UpperBody", "LowerBody", "FullBody"].includes(body.context.bodyPart)
-  ) {
+  if (!["UpperBody", "LowerBody", "FullBody"].includes(body.context.bodyPart)) {
     return `Invalid bodyPart: ${body.context.bodyPart}`;
   }
 
   if (
-    !["Isotonic", "Isometric", "Isokinetic"].includes(
-      body.context.contraction
-    )
+    !["Isotonic", "Isometric", "Isokinetic"].includes(body.context.contraction)
   ) {
     return `Invalid contraction: ${body.context.contraction}`;
   }
 
-  if (!body.context.exerciseName || typeof body.context.exerciseName !== "string") {
+  if (
+    !body.context.exerciseName ||
+    typeof body.context.exerciseName !== "string"
+  ) {
     return "exerciseName is required and must be a string";
   }
 
