@@ -51,16 +51,33 @@ class MuscleMetricUtils {
   // Module 1: 전신 관절 기여도 분석 (Global Kinematics)
   // ============================================
 
-  /// 전신 관절 기여도 분석
+  /// 전신 관절 기여도 분석 (저프레임 보정: 누적 이동량 기반)
   /// [jointDeltas] 관절별 프레임 간 각도 변화량 절대값 맵
   /// 반환: {'ratios': Map, 'totalROM': double, 'regionDominance': String, 'lowerShare': double, 'upperShare': double}
+  ///
+  /// 🔧 수정: 프레임 간 delta만 보지 말고 누적 이동량을 기준으로 계산
+  /// 작은 떨림(Noise)은 무시하고 큰 움직임(Major Movement)에 가중치 부여
   static Map<String, dynamic> analyzeGlobalJointContribution(
     Map<String, double> jointDeltas,
   ) {
-    // Total System Excursion 계산
-    final totalROM = jointDeltas.values.fold<double>(
+    // 🔧 1. 노이즈 필터링: 작은 떨림(2도 미만)은 무시
+    final filteredDeltas = <String, double>{};
+    for (final entry in jointDeltas.entries) {
+      final delta = entry.value.abs();
+      // 큰 움직임만 유지 (2도 이상)
+      if (delta >= 2.0) {
+        filteredDeltas[entry.key] = delta;
+      } else {
+        // 작은 떨림은 0으로 처리
+        filteredDeltas[entry.key] = 0.0;
+      }
+    }
+
+    // 🔧 2. 누적 이동량 계산 (Total Accumulated Change)
+    // 프레임이 적어도 실제로 많이 움직인 관절이 높은 점수를 받도록
+    final totalROM = filteredDeltas.values.fold<double>(
       0.0,
-      (sum, delta) => sum + delta.abs(),
+      (sum, delta) => sum + delta,
     );
 
     if (totalROM == 0.0) {
@@ -73,32 +90,46 @@ class MuscleMetricUtils {
       };
     }
 
-    // Contribution Ratio 계산
+    // 🔧 3. Contribution Ratio 계산 (누적 이동량 기반)
     final ratios = <String, double>{};
-    for (final entry in jointDeltas.entries) {
-      final ratio = entry.value.abs() / totalROM;
+    for (final entry in filteredDeltas.entries) {
+      final ratio = entry.value / totalROM;
       ratios[entry.key] = ratio;
     }
 
-    // Region Dominance 판별 (비율 기반)
+    // 🔧 4. Region Dominance 판별 (절대평가: 누적 이동량 합 비교)
+    // Threshold 0.6 제거, 단순히 더 많이 움직인 쪽을 선택
     final lowerBodyJoints = ['hip', 'knee', 'ankle'];
     final upperBodyJoints = ['shoulder', 'elbow', 'wrist'];
 
+    // 🔧 누적 이동량 합 계산 (비율이 아닌 절대값)
+    double lowerTotalMovement = 0.0;
+    double upperTotalMovement = 0.0;
+
+    for (final joint in lowerBodyJoints) {
+      lowerTotalMovement += filteredDeltas[joint] ?? 0.0;
+    }
+    for (final joint in upperBodyJoints) {
+      upperTotalMovement += filteredDeltas[joint] ?? 0.0;
+    }
+
+    // 🔧 절대평가: 더 많이 움직인 쪽을 regionDominance로 결정
+    String regionDominance = 'HYBRID';
+    if (lowerTotalMovement > upperTotalMovement && lowerTotalMovement > 0.0) {
+      regionDominance = 'LOWER_BODY';
+    } else if (upperTotalMovement > lowerTotalMovement &&
+        upperTotalMovement > 0.0) {
+      regionDominance = 'UPPER_BODY';
+    }
+
+    // Share 계산 (비율, 하위 호환성)
     double lowerShare = 0.0;
     double upperShare = 0.0;
-
     for (final joint in lowerBodyJoints) {
       lowerShare += ratios[joint] ?? 0.0;
     }
     for (final joint in upperBodyJoints) {
       upperShare += ratios[joint] ?? 0.0;
-    }
-
-    String regionDominance = 'HYBRID';
-    if (lowerShare > 0.6) {
-      regionDominance = 'LOWER_BODY';
-    } else if (upperShare > 0.6) {
-      regionDominance = 'UPPER_BODY';
     }
 
     return {
@@ -185,7 +216,7 @@ class MuscleMetricUtils {
             penalty = (1.0 - rhythmRatio * 2.0).clamp(0.0, 1.0);
           }
         }
-    }
+      }
 
       // Protraction Vector 감지 (등 풀림)
       final currLeftShoulder = currPose.landmarks['leftShoulder'];
@@ -292,7 +323,7 @@ class MuscleMetricUtils {
           final normalized = (armElevation - 30.0) / 30.0;
           pectoralisScores['upper'] =
               (1.0 - (normalized - 0.5).abs() * 2.0) * 100.0;
-    }
+        }
       }
       // Mid (Sternal): Elbow와 Shoulder 높이가 비슷
       else if (yDiff < 0.05) {
@@ -303,7 +334,7 @@ class MuscleMetricUtils {
 
         pectoralisScores['sternal'] =
             math.exp(-horizontalAdduction * 10.0) * 100.0;
-  }
+      }
       // Lower (Costal): Elbow가 Shoulder보다 낮음
       else if (elbowY > shoulderY) {
         // 하방(Depression) 벡터
@@ -882,8 +913,18 @@ class MuscleMetricUtils {
       }
     }
 
+    // 🔧 Step 6: 결과 정렬 (활성도 점수 높은 순서대로 내림차순)
+    // UI에서 entries.toList()만 해도 가장 많이 쓴 근육이 맨 위에 뜨도록
+    final sortedMuscleUsage = <String, double>{};
+    final muscleEntries = muscleUsage.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value)); // 내림차순 정렬
+
+    for (final entry in muscleEntries) {
+      sortedMuscleUsage[entry.key] = entry.value;
+    }
+
     return {
-      'detailed_muscle_usage': sanitizeOutputMap(muscleUsage),
+      'detailed_muscle_usage': sanitizeOutputMap(sortedMuscleUsage),
       'rom_data': sanitizeOutputMap(romData),
       'biomech_pattern': biomechPattern,
     };
@@ -1252,18 +1293,33 @@ class MuscleMetricUtils {
   }) {
     // ============================================
     // Step 1: 기초 운동학 레이어 (Base Kinematics Layer)
+    // 🔧 저프레임 보정: ROM 점수 비중 강화 (30% -> 60%)
     // ============================================
     double baseScore = 0.0;
+    double romScore = 0.0;
+    double velocityScore = 0.0;
 
-    // 각도 변화량 기반 기본 점수 계산
+    // 🔧 1. ROM 점수 계산 (우선순위 높음, 저프레임에서도 정확)
+    if (rom != null && rom > 5.0) {
+      // ROM 기반 점수: 가동 범위가 크면 근육을 많이 쓴 것으로 간주
+      // 비중 60%: (rom / 180.0 * 60.0) -> 최대 60점
+      romScore = (rom / 180.0 * 60.0).clamp(0.0, 60.0);
+    }
+
+    // 🔧 2. 속도 점수 계산 (보조 지표, 비중 40%)
     if (deltaAngle != null && deltaAngle.abs() > 0.1) {
       // Angular Velocity 계산: (DeltaAngle / Time) * Weight
       final angularVelocity = (deltaAngle.abs() / timeDelta);
       final weight = 1.0; // 기본 가중치
-      baseScore = (angularVelocity * weight).clamp(10.0, 30.0);
-    } else if (rom != null && rom > 5.0) {
-      // ROM 기반 기본 점수 (움직임이 있으면 최소 10% 보장)
-      baseScore = (rom / 180.0 * 20.0).clamp(10.0, 30.0);
+      // 비중 40%: 최대 40점
+      velocityScore = (angularVelocity * weight * 0.4).clamp(0.0, 40.0);
+    }
+
+    // 🔧 3. 최종 baseScore: ROM 60% + 속도 40% (저프레임 보정)
+    if (romScore > 0.0 || velocityScore > 0.0) {
+      baseScore = romScore + velocityScore;
+      // 최소 10% 보장
+      baseScore = baseScore.clamp(10.0, 100.0);
     } else {
       // 등척성 운동: 자세 유지 시간이 길어지면 점수 상승
       if (motionType == 'isometric') {

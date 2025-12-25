@@ -150,23 +150,23 @@ class _UploadFormScreenState extends State<UploadFormScreen> {
         return;
       }
 
-      // 결과 화면으로 이동 (실제 분석 결과 화면 - 히스토리 목록과 동일)
-      // 🔧 중요: logId를 우선 사용하여 DB에서 실제 데이터를 가져옴
-      // videoId와 logId는 동일한 값(workout_logs.id)이지만, 명확성을 위해 logId 사용
+      // 결과 화면으로 이동 (히스토리 상세 화면과 동일)
+      // 🔧 중요: ID만 전달하고 화면 내부에서 DB에서 최신 데이터를 불러옴
+      // 로컬 객체를 넘기지 않고, 항상 DB에서 최신 데이터를 조회하도록 강제
       if (mounted) {
         final finalLogId = logId.isEmpty ? videoId : logId;
         debugPrint(
           '🔄 [UploadFormScreen] ResultScreen으로 이동: videoId=$videoId, logId=$finalLogId',
         );
         debugPrint(
-          '   📊 [UploadFormScreen] DB에서 실제 분석 데이터를 조회합니다 (더미 데이터 없음)',
+          '   📊 [UploadFormScreen] ID만 전달 - 화면 내부에서 DB에서 최신 데이터를 조회합니다',
         );
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => ResultScreen(
               videoId: videoId, // workout_logs.id (UUID String)
               logId: finalLogId, // workout_logs.id (UUID String) - DB 조회용
-              exerciseName: videoTitle,
+              // 🔧 exerciseName 파라미터 제거 - DB에서 불러옴
             ),
           ),
         );

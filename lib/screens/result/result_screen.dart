@@ -13,13 +13,13 @@ import '../../utils/muscle_metric_utils.dart';
 class ResultScreen extends StatefulWidget {
   final String videoId; // videos.id (UUID String) - 필수
   final String? logId; // workout_logs.id (UUID String) - 하위 호환성 (선택)
-  final String exerciseName;
+  final String? exerciseName; // 🔧 선택적으로 변경 (DB에서 불러옴)
 
   const ResultScreen({
     super.key,
     required this.videoId,
     this.logId, // 선택적 파라미터로 변경
-    required this.exerciseName,
+    this.exerciseName, // 🔧 선택적으로 변경
   });
 
   @override
@@ -38,6 +38,12 @@ class _ResultScreenState extends State<ResultScreen>
 
   // 원본 분석 데이터 (rom_data, motion_data 접근용)
   Map<String, dynamic>? _rawAnalysisData;
+
+  // 🔧 workout_logs 전체 응답 저장 (analysis_result 직접 접근용)
+  Map<String, dynamic>? _workoutLogResponse;
+
+  // 🔧 DB에서 불러온 운동 이름 (exerciseName 파라미터 대신 사용)
+  String? _exerciseNameFromDb;
 
   // Context 정보 (운동 맥락)
   String _targetBodyPart = 'WholeBody'; // 'UpperBody', 'LowerBody', 'WholeBody'
@@ -121,11 +127,25 @@ class _ResultScreenState extends State<ResultScreen>
       // Primary Key: id 사용 (logId가 있으면 우선 사용, 없으면 videoId 사용)
       // 🔧 중요: workout_logs 테이블의 Primary Key는 'id' 컬럼입니다 (log_id 아님)
       // 🔧 Fix: ai_analysis_result와 analysis_result 모두 조회하여 호환성 확보
+      // 🔧 exercise_name도 함께 조회하여 DB에서 최신 데이터 불러오기
       final workoutLogResponse = await SupabaseService.instance.client
           .from('workout_logs')
-          .select('ai_analysis_result, analysis_result, video_path, status')
+          .select(
+            'ai_analysis_result, analysis_result, video_path, status, exercise_name',
+          )
           .eq('id', queryId)
           .maybeSingle();
+
+      // 🔧 workout_logs 전체 응답 저장 (analysis_result 직접 접근용)
+      _workoutLogResponse = workoutLogResponse;
+
+      // 🔧 DB에서 exercise_name 불러오기 (파라미터 대신 사용)
+      if (workoutLogResponse != null) {
+        _exerciseNameFromDb = workoutLogResponse['exercise_name']?.toString();
+        debugPrint(
+          '✅ [ResultScreen] DB에서 exercise_name 로드: $_exerciseNameFromDb',
+        );
+      }
 
       // 🔧 Fix: status가 PENDING 또는 ANALYZING인 경우 분석 중 메시지 표시
       if (workoutLogResponse != null) {
@@ -306,7 +326,7 @@ class _ResultScreenState extends State<ResultScreen>
     if (_biomechanicsResult == null) {
       return Scaffold(
         appBar: AppBar(
-          title: Text(widget.exerciseName),
+          title: Text((_exerciseNameFromDb ?? widget.exerciseName ?? '운동 분석')),
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         ),
         body: Center(
@@ -355,7 +375,7 @@ class _ResultScreenState extends State<ResultScreen>
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(widget.exerciseName),
+        title: Text((_exerciseNameFromDb ?? widget.exerciseName ?? '운동 분석')),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
@@ -571,11 +591,14 @@ class _ResultScreenState extends State<ResultScreen>
         if (firstScore > 0 && secondScore > 0) {
           final diffPercent = ((firstScore - secondScore) / secondScore * 100)
               .clamp(0.0, 1000.0);
-          final firstName = MuscleNameMapper.localize(first.key);
-          final secondName = MuscleNameMapper.localize(second.key);
-          comparisonTexts.add(
-            '현재 동작에서는 $firstName이 $secondName보다 ${diffPercent.toStringAsFixed(1)}% 더 높은 활성도를 보였습니다.',
-          );
+          // 🔧 0.0% 차이는 표시하지 않음 (의미 없는 비교)
+          if (diffPercent > 0.1) {
+            final firstName = MuscleNameMapper.localize(first.key);
+            final secondName = MuscleNameMapper.localize(second.key);
+            comparisonTexts.add(
+              '현재 동작에서는 $firstName이 $secondName보다 ${diffPercent.toStringAsFixed(1)}% 더 높은 활성도를 보였습니다.',
+            );
+          }
         }
       }
     }
@@ -598,11 +621,15 @@ class _ResultScreenState extends State<ResultScreen>
         if (firstScore > 0 && secondScore > 0) {
           final diffPercent = ((firstScore - secondScore) / secondScore * 100)
               .clamp(0.0, 1000.0);
-          final firstName = MuscleNameMapper.getJointDisplayName(first.key);
-          final secondName = MuscleNameMapper.getJointDisplayName(second.key);
-          comparisonTexts.add(
-            '현재 동작에서는 $firstName이 $secondName보다 ${diffPercent.toStringAsFixed(1)}% 더 많이 사용되었습니다.',
-          );
+          // 🔧 0.0% 차이는 표시하지 않음 (의미 없는 비교)
+          if (diffPercent > 0.1) {
+            // 🔧 원본 키를 그대로 전달하여 '왼쪽/오른쪽' 구분 유지
+            final firstName = MuscleNameMapper.getJointDisplayName(first.key);
+            final secondName = MuscleNameMapper.getJointDisplayName(second.key);
+            comparisonTexts.add(
+              '현재 동작에서는 $firstName이 $secondName보다 ${diffPercent.toStringAsFixed(1)}% 더 많이 사용되었습니다.',
+            );
+          }
         }
       }
     }
@@ -661,39 +688,81 @@ class _ResultScreenState extends State<ResultScreen>
     final muscleData = <String, double>{};
 
     // 🔧 1순위: analysis_result['muscle_usage'] 직접 사용 (VideoRepository에서 저장한 데이터)
+    // _rawAnalysisData는 ai_analysis_result 또는 analysis_result 중 하나만 저장하므로,
+    // workout_logs에서 직접 analysis_result를 확인해야 함
+    Map<String, dynamic>? muscleUsageRaw;
+
+    // 1-1. _rawAnalysisData에서 확인 (ai_analysis_result 또는 analysis_result)
     if (_rawAnalysisData != null) {
       try {
-        final muscleUsageRaw =
+        muscleUsageRaw =
             _rawAnalysisData!['muscle_usage'] as Map<String, dynamic>?;
         if (muscleUsageRaw != null && muscleUsageRaw.isNotEmpty) {
-          for (final entry in muscleUsageRaw.entries) {
-            final muscleKey = entry.key;
-            final value = entry.value;
-            double? score;
-
-            if (value is num) {
-              score = value.toDouble();
-            } else if (value is String) {
-              score = double.tryParse(value);
-            }
-
-            if (score != null &&
-                score > 0 &&
-                !score.isNaN &&
-                !score.isInfinite) {
-              // 지능형 필터링 적용
-              if (_isValidMuscle(muscleKey, score)) {
-                muscleData[muscleKey] = score;
-              }
-            }
-          }
           debugPrint(
-            '✅ [ResultScreen] muscle_usage에서 ${muscleData.length}개 근육 로드',
+            '✅ [ResultScreen] _rawAnalysisData에서 muscle_usage 발견: ${muscleUsageRaw.length}개',
           );
         }
       } catch (e) {
+        debugPrint(
+          '⚠️ [ResultScreen] _rawAnalysisData에서 muscle_usage 파싱 실패: $e',
+        );
+      }
+    }
+
+    // 1-2. _rawAnalysisData에 없으면, workout_logs의 analysis_result에서 직접 확인
+    // (ai_analysis_result가 우선되어 analysis_result가 _rawAnalysisData에 없을 수 있음)
+    if ((muscleUsageRaw == null || muscleUsageRaw.isEmpty) &&
+        _workoutLogResponse != null) {
+      try {
+        final analysisResult =
+            _workoutLogResponse!['analysis_result'] as Map<String, dynamic>?;
+        if (analysisResult != null) {
+          muscleUsageRaw =
+              analysisResult['muscle_usage'] as Map<String, dynamic>?;
+          if (muscleUsageRaw != null && muscleUsageRaw.isNotEmpty) {
+            debugPrint(
+              '✅ [ResultScreen] workout_logs.analysis_result에서 muscle_usage 발견: ${muscleUsageRaw.length}개',
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint(
+          '⚠️ [ResultScreen] workout_logs.analysis_result에서 muscle_usage 파싱 실패: $e',
+        );
+      }
+    }
+
+    // 1-3. muscle_usage 데이터 파싱 및 필터링
+    if (muscleUsageRaw != null && muscleUsageRaw.isNotEmpty) {
+      try {
+        for (final entry in muscleUsageRaw.entries) {
+          final muscleKey = entry.key;
+          final value = entry.value;
+          double? score;
+
+          if (value is num) {
+            score = value.toDouble();
+          } else if (value is String) {
+            score = double.tryParse(value);
+          }
+
+          if (score != null && score > 0 && !score.isNaN && !score.isInfinite) {
+            // 지능형 필터링 적용
+            if (_isValidMuscle(muscleKey, score)) {
+              muscleData[muscleKey] = score;
+            }
+          }
+        }
+        debugPrint(
+          '✅ [ResultScreen] muscle_usage에서 ${muscleData.length}개 근육 로드',
+        );
+      } catch (e) {
         debugPrint('⚠️ [ResultScreen] muscle_usage 파싱 실패: $e');
       }
+    } else {
+      debugPrint(
+        '⚠️ [ResultScreen] muscle_usage를 찾을 수 없음 (_rawAnalysisData와 analysis_result 모두 확인)',
+      );
     }
 
     // 🔧 2순위: muscleScores (백엔드 데이터) - muscle_usage가 없을 때만 사용
@@ -748,14 +817,26 @@ class _ResultScreenState extends State<ResultScreen>
     // 필터링된 근육 데이터 가져오기
     final muscleData = _getFilteredMuscleData();
 
-    // muscleData가 비어있으면 N/A 표시
+    // muscleData가 비어있으면 '분석 중' 표시
     if (muscleData.isEmpty) {
       return Container(
         color: Colors.white,
-        child: const Center(
-          child: Text(
-            'N/A',
-            style: TextStyle(fontSize: 16, color: Colors.grey),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Text(
+                '분석 중...',
+                style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '근육 활성도 데이터를 불러오는 중입니다.',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+              ),
+            ],
           ),
         ),
       );
@@ -964,12 +1045,17 @@ class _ResultScreenState extends State<ResultScreen>
     if (_biomechanicsResult!.jointStats != null &&
         _biomechanicsResult!.jointStats!.isNotEmpty) {
       for (final entry in _biomechanicsResult!.jointStats!.entries) {
+        final jointKey = entry.key; // 🔧 원본 키 보존
         final jointStat = entry.value;
         // 값이 0이거나 의미 없는 데이터는 필터링
         if (jointStat.romDegrees > 0 ||
             jointStat.contributionScore > 0 ||
             jointStat.stabilityScore > 0) {
-          jointData[entry.key] = jointStat;
+          // 🔧 원본 키를 그대로 저장하여 '왼쪽/오른쪽' 구분 유지
+          jointData[jointKey] = jointStat;
+          debugPrint(
+            '✅ [ResultScreen] 관절 데이터 추가: $jointKey -> ROM: ${jointStat.romDegrees.toStringAsFixed(1)}°',
+          );
         }
       }
     }
@@ -1002,9 +1088,14 @@ class _ResultScreenState extends State<ResultScreen>
         itemCount: sorted.length,
         itemBuilder: (context, index) {
           final entry = sorted[index];
-          final jointName = entry.key;
+          final jointName = entry.key; // 🔧 원본 키 (예: left_hip, hip_L 등)
           final jointStat = entry.value;
           final romDegrees = jointStat.romDegrees;
+
+          // 🔧 디버그: 관절 키 형식 확인
+          debugPrint(
+            '🔍 [ResultScreen] 관절 키: $jointName -> ${MuscleNameMapper.getJointDisplayName(jointName)}',
+          );
 
           // ROM을 0~180도 범위로 정규화하여 progress 값 계산
           final romProgress = (romDegrees / 180.0).clamp(0.0, 1.0);
@@ -1032,6 +1123,7 @@ class _ResultScreenState extends State<ResultScreen>
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
+                          // 🔧 원본 키(jointName)를 그대로 전달하여 '왼쪽/오른쪽' 구분 유지
                           MuscleNameMapper.getJointDisplayName(jointName),
                           style: const TextStyle(
                             fontSize: 16,
