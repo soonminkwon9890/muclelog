@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../services/supabase_service.dart';
-import '../../models/analysis_log.dart';
 import '../camera/camera_screen.dart';
 import '../upload/upload_form_screen.dart';
 import '../history/comparison_screen.dart';
@@ -19,7 +18,8 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   final ImagePicker _imagePicker = ImagePicker();
-  Map<ExerciseType, List<Map<String, dynamic>>> _groupedLogs = {};
+  // body_part 기준으로 그룹화: 'UpperBody', 'LowerBody', 'WholeBody'
+  Map<String, List<Map<String, dynamic>>> _groupedLogs = {};
   bool _isLoading = true;
   bool _isSelectionMode = false; // 선택 모드 상태
   final Set<String> _selectedVideoIds = {}; // 선택된 비디오 ID들 (String으로 저장)
@@ -50,17 +50,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
       if (!mounted) return;
 
-      // exerciseType별로 그룹화
-      final grouped = <ExerciseType, List<Map<String, dynamic>>>{
-        ExerciseType.upper: [],
-        ExerciseType.lower: [],
-        ExerciseType.full: [],
+      // body_part별로 그룹화
+      final grouped = <String, List<Map<String, dynamic>>>{
+        'UpperBody': [],
+        'LowerBody': [],
+        'WholeBody': [],
       };
 
       for (final log in response) {
-        final exerciseTypeStr = log['exercise_type']?.toString();
-        final exerciseType = ExerciseType.fromString(exerciseTypeStr);
-        grouped[exerciseType]?.add(log);
+        final bodyPartStr = log['body_part']?.toString() ?? '';
+        // body_part 값에 따라 분류 (대소문자 무시)
+        String category;
+        if (bodyPartStr.toLowerCase() == 'upperbody' ||
+            bodyPartStr.toLowerCase() == 'upper_body') {
+          category = 'UpperBody';
+        } else if (bodyPartStr.toLowerCase() == 'lowerbody' ||
+            bodyPartStr.toLowerCase() == 'lower_body') {
+          category = 'LowerBody';
+        } else if (bodyPartStr.toLowerCase() == 'wholebody' ||
+            bodyPartStr.toLowerCase() == 'whole_body' ||
+            bodyPartStr.toLowerCase() == 'fullbody' ||
+            bodyPartStr.toLowerCase() == 'full_body') {
+          category = 'WholeBody';
+        } else {
+          // 매칭되지 않으면 "전신"으로 분류
+          category = 'WholeBody';
+        }
+        grouped[category]?.add(log);
       }
 
       setState(() {
@@ -351,12 +367,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
             : ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
-                  // 운동 타입별 아코디언 섹션
-                  _buildExerciseTypeSection(ExerciseType.upper),
+                  // 운동 부위별 아코디언 섹션
+                  _buildBodyPartSection('UpperBody'),
                   const SizedBox(height: 8),
-                  _buildExerciseTypeSection(ExerciseType.lower),
+                  _buildBodyPartSection('LowerBody'),
                   const SizedBox(height: 8),
-                  _buildExerciseTypeSection(ExerciseType.full),
+                  _buildBodyPartSection('WholeBody'),
                 ],
               ),
       ),
@@ -383,33 +399,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return _groupedLogs.values.every((logs) => logs.isEmpty);
   }
 
-  /// 운동 타입별 섹션 헤더 라벨
-  String _getExerciseTypeLabel(ExerciseType type) {
-    switch (type) {
-      case ExerciseType.upper:
+  /// 운동 부위별 섹션 헤더 라벨
+  String _getBodyPartLabel(String bodyPart) {
+    switch (bodyPart) {
+      case 'UpperBody':
         return '상체 운동';
-      case ExerciseType.lower:
+      case 'LowerBody':
         return '하체 운동';
-      case ExerciseType.full:
+      case 'WholeBody':
+        return '전신 운동';
+      default:
         return '전신 운동';
     }
   }
 
-  /// 운동 타입별 아이콘
-  IconData _getExerciseTypeIcon(ExerciseType type) {
-    switch (type) {
-      case ExerciseType.upper:
+  /// 운동 부위별 아이콘
+  IconData _getBodyPartIcon(String bodyPart) {
+    switch (bodyPart) {
+      case 'UpperBody':
         return Icons.accessibility_new;
-      case ExerciseType.lower:
+      case 'LowerBody':
         return Icons.directions_walk;
-      case ExerciseType.full:
+      case 'WholeBody':
+        return Icons.person;
+      default:
         return Icons.person;
     }
   }
 
-  /// 운동 타입별 아코디언 섹션 위젯
-  Widget _buildExerciseTypeSection(ExerciseType type) {
-    final logs = _groupedLogs[type] ?? [];
+  /// 운동 부위별 아코디언 섹션 위젯
+  Widget _buildBodyPartSection(String bodyPart) {
+    final logs = _groupedLogs[bodyPart] ?? [];
     final count = logs.length;
 
     // 기록이 없으면 섹션을 표시하지 않음
@@ -420,9 +440,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ExpansionTile(
-        leading: Icon(_getExerciseTypeIcon(type), color: Colors.deepPurple),
+        leading: Icon(_getBodyPartIcon(bodyPart), color: Colors.deepPurple),
         title: Text(
-          _getExerciseTypeLabel(type),
+          _getBodyPartLabel(bodyPart),
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         trailing: _buildCountBadge(count),

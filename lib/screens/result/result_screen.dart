@@ -114,13 +114,13 @@ class _ResultScreenState extends State<ResultScreen>
         return;
       }
 
-      // 1. workout_logs 테이블에서 ai_analysis_result 조회
+      // 1. workout_logs 테이블에서 분석 결과 조회
       // Primary Key: id 사용 (logId가 있으면 우선 사용, 없으면 videoId 사용)
       // 🔧 중요: workout_logs 테이블의 Primary Key는 'id' 컬럼입니다 (log_id 아님)
-      // 🔧 Fix: status 필드를 select에 추가하여 분석 상태 확인 가능하도록 수정
+      // 🔧 Fix: ai_analysis_result와 analysis_result 모두 조회하여 호환성 확보
       final workoutLogResponse = await SupabaseService.instance.client
           .from('workout_logs')
-          .select('ai_analysis_result, video_path, status')
+          .select('ai_analysis_result, analysis_result, video_path, status')
           .eq('id', queryId)
           .maybeSingle();
 
@@ -138,19 +138,37 @@ class _ResultScreenState extends State<ResultScreen>
         }
       }
 
-      if (workoutLogResponse != null &&
-          workoutLogResponse['ai_analysis_result'] != null) {
-        final aiAnalysisResult =
-            workoutLogResponse['ai_analysis_result'] as Map<String, dynamic>;
+      // 분석 결과 데이터 확인 (우선순위: ai_analysis_result > analysis_result)
+      Map<String, dynamic>? analysisData;
+      String? dataSource;
 
+      if (workoutLogResponse != null) {
+        // 1순위: ai_analysis_result 확인
+        final aiResult = workoutLogResponse['ai_analysis_result'];
+        if (aiResult != null && aiResult is Map<String, dynamic>) {
+          analysisData = aiResult;
+          dataSource = 'ai_analysis_result';
+          debugPrint('✅ [ResultScreen] ai_analysis_result에서 데이터 발견');
+        }
+        // 2순위: analysis_result 확인 (ai_analysis_result가 없을 때만)
+        else {
+          final analysisResult = workoutLogResponse['analysis_result'];
+          if (analysisResult != null &&
+              analysisResult is Map<String, dynamic>) {
+            analysisData = analysisResult;
+            dataSource = 'analysis_result';
+            debugPrint('✅ [ResultScreen] analysis_result에서 데이터 발견');
+          }
+        }
+      }
+
+      if (analysisData != null) {
         // EnhancedAnalysisResult 형식으로 파싱
         try {
           _biomechanicsResult = BiomechanicsResult.fromAnalysisResult(
-            aiAnalysisResult,
+            analysisData,
           );
-          debugPrint(
-            '✅ [ResultScreen] workout_logs.ai_analysis_result에서 로드 완료',
-          );
+          debugPrint('✅ [ResultScreen] workout_logs.$dataSource에서 로드 완료');
           debugPrint(
             '   - jointStats: ${_biomechanicsResult!.jointStats?.length ?? 0}개',
           );
@@ -164,25 +182,27 @@ class _ResultScreenState extends State<ResultScreen>
         }
 
         // 영상 URL 가져오기
-        final videoPath = workoutLogResponse['video_path']?.toString();
-        if (videoPath != null) {
-          // 🔧 video_path가 전체 URL인지 경로인지 확인
-          if (videoPath.startsWith('http://') ||
-              videoPath.startsWith('https://')) {
-            // 이미 전체 URL이면 그대로 사용
-            _videoUrl = videoPath;
-          } else {
-            // 경로만 있으면 Public URL로 변환
-            _videoUrl = SupabaseService.instance.client.storage
-                .from('videos')
-                .getPublicUrl(videoPath);
+        if (workoutLogResponse != null) {
+          final videoPath = workoutLogResponse['video_path']?.toString();
+          if (videoPath != null && videoPath.isNotEmpty) {
+            // 🔧 video_path가 전체 URL인지 경로인지 확인
+            if (videoPath.startsWith('http://') ||
+                videoPath.startsWith('https://')) {
+              // 이미 전체 URL이면 그대로 사용
+              _videoUrl = videoPath;
+            } else {
+              // 경로만 있으면 Public URL로 변환
+              _videoUrl = SupabaseService.instance.client.storage
+                  .from('videos')
+                  .getPublicUrl(videoPath);
+            }
           }
         }
       } else {
         // 백엔드 데이터가 없으면 null로 설정 (레거시 Fallback 없음)
         _biomechanicsResult = null;
         debugPrint(
-          '⚠️ [ResultScreen] workout_logs.ai_analysis_result가 없음 - UI에 "N/A" 표시',
+          '⚠️ [ResultScreen] workout_logs에서 분석 결과를 찾을 수 없음 (ai_analysis_result, analysis_result 모두 null)',
         );
 
         // workout_logs 테이블에서 영상 경로 조회
@@ -288,17 +308,30 @@ class _ResultScreenState extends State<ResultScreen>
                 const Icon(Icons.info_outline, size: 64, color: Colors.grey),
                 const SizedBox(height: 16),
                 const Text(
-                  '분석 데이터가 없습니다.',
+                  '분석 데이터가 없습니다',
                   style: TextStyle(fontSize: 16, color: Colors.grey),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Core Engine 분석 결과를 기다리는 중이거나\n데이터가 아직 생성되지 않았습니다.',
+                  '분석 결과를 기다리는 중이거나\n데이터가 아직 생성되지 않았습니다.',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 24),
-                ElevatedButton(
+                ElevatedButton.icon(
+                  onPressed: () {
+                    // 새로고침: 분석 결과 다시 로드
+                    setState(() {
+                      _isLoading = true;
+                      _biomechanicsResult = null;
+                    });
+                    _loadAnalysisResult();
+                  },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('새로고침'),
+                ),
+                const SizedBox(height: 12),
+                TextButton(
                   onPressed: () => Navigator.of(context).pop(),
                   child: const Text('돌아가기'),
                 ),
