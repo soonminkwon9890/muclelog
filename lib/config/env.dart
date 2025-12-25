@@ -65,8 +65,8 @@ class Env {
   static String get nextJsApiUrl {
     final url = dotenv.env['NEXT_JS_API_URL'];
     if (url == null || url.isEmpty) {
-      // 기본값: 로컬 개발 환경
-      return 'http://localhost:3000';
+      // 기본값: Vercel 배포 환경
+      return 'https://muclelog.vercel.app';
     }
     return url;
   }

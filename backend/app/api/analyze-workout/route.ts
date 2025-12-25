@@ -16,10 +16,12 @@ export async function POST(request: NextRequest) {
   try {
     // 1. Request Body 파싱
     const body: AnalyzeWorkoutRequest = await request.json();
+    console.log("Received Body:", body);
 
     // 2. 입력 데이터 검증
     const validationError = validateRequest(body);
     if (validationError) {
+      console.error("Validation Error:", validationError);
       return NextResponse.json(
         {
           success: false,
