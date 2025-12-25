@@ -4,6 +4,7 @@ import '../../widgets/muscle_heatmap_widget.dart';
 import '../../widgets/skeleton_loader.dart';
 import '../../viewmodels/comparison_viewmodel.dart';
 import '../../models/biomechanics_result.dart';
+import '../../utils/muscle_name_mapper.dart';
 
 /// 비교 분석 화면
 /// 2개의 분석 기록(과거 vs 현재)을 비교하여 변화량을 표시합니다.
@@ -367,7 +368,7 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
           margin: const EdgeInsets.only(bottom: 8.0),
           color: isHighlighted ? Colors.blue.shade50 : Colors.white,
           child: ListTile(
-            title: Text(muscleName),
+            title: Text(MuscleNameMapper.localize(muscleName)),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -455,7 +456,7 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
           color: isHighlighted ? Colors.blue.shade50 : Colors.white,
           child: ExpansionTile(
             initiallyExpanded: isExpanded,
-            title: Text(jointName),
+            title: Text(MuscleNameMapper.getJointDisplayName(jointName)),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [

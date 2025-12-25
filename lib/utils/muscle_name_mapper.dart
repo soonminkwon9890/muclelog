@@ -40,29 +40,57 @@ class MuscleNameMapper {
 
   // 3. 관절 데이터 매핑 테이블
   static const Map<String, String> jointMappingTable = {
+    // 좌우 구분 관절
+    'left_hip': '왼쪽 고관절',
+    'right_hip': '오른쪽 고관절',
+    'left_knee': '왼쪽 무릎',
+    'right_knee': '오른쪽 무릎',
+    'left_ankle': '왼쪽 발목',
+    'right_ankle': '오른쪽 발목',
+    'left_shoulder': '왼쪽 어깨',
+    'right_shoulder': '오른쪽 어깨',
+    'left_elbow': '왼쪽 팔꿈치',
+    'right_elbow': '오른쪽 팔꿈치',
+    'left_wrist': '왼쪽 손목',
+    'right_wrist': '오른쪽 손목',
+    // 기존 관절 키 (하위 호환성)
     'neck': '경추',
-    'shoulder': '견관절',
-    'elbow': '주관절',
-    'wrist': '수근관절',
     'spine': '척추',
-    'hip': '고관절',
-    'knee': '슬관절',
-    'ankle': '족관절',
   };
 
   // 4. 근육명 한글화 (외부에서 이걸 호출)
   static String localize(String englishKey) {
     if (englishKey.isEmpty) return "-";
 
-    // 소문자 변환 및 _ 제거 (검색 확률 높이기)
-    final normalizedKey = englishKey
-        .toLowerCase()
+    // 소문자 변환
+    final lowerKey = englishKey.toLowerCase();
+
+    // 1. left/right 접두어 추출 및 제거
+    String prefix = '';
+    String remainingKey = lowerKey;
+
+    if (remainingKey.contains('left')) {
+      prefix = '왼쪽 ';
+      remainingKey = remainingKey.replaceAll('left', '');
+    } else if (remainingKey.contains('right')) {
+      prefix = '오른쪽 ';
+      remainingKey = remainingKey.replaceAll('right', '');
+    }
+
+    // 2. 남은 문자열에서 _와 공백 제거하여 순수한 근육명 키 추출
+    final normalizedKey = remainingKey
         .replaceAll('_', '')
         .replaceAll(' ', '')
         .trim();
 
-    // 맵에서 찾고, 없으면 원래 영어 키 반환
-    return _muscleMap[normalizedKey] ?? englishKey;
+    // 3. _muscleMap에서 해당 키를 찾아, 찾으면 "접두어 + 한글명" 반환
+    final koreanName = _muscleMap[normalizedKey];
+    if (koreanName != null) {
+      return prefix + koreanName;
+    }
+
+    // 4. 못 찾으면 원래 englishKey 반환
+    return englishKey;
   }
 
   // 5. 관절명 한글화 (muscle_joint_mapper에서 통합)

@@ -352,14 +352,18 @@ class BiomechanicsResult {
       }
 
       // 🔧 새로운 필드 파싱: muscle_scores (유연한 키 매칭)
-      // 로그에서 확인된 실제 키: detailed_muscle_usage (최우선)
+      // VideoRepository에서 저장한 muscle_usage를 최우선으로 확인
       Map<String, MuscleScore>? muscleScores;
       final muscleScoresRaw =
+          data['muscle_usage']
+              as Map<
+                String,
+                dynamic
+              >? ?? // <--- [NEW] VideoRepository에서 저장한 키 (최우선)
           data['detailed_muscle_usage']
-              as Map<String, dynamic>? ?? // <--- [NEW] 로그에서 확인된 키 (최우선)
+              as Map<String, dynamic>? ?? // 로그에서 확인된 키
           data['muscle_scores'] as Map<String, dynamic>? ??
           data['muscleScores'] as Map<String, dynamic>? ??
-          data['muscle_usage'] as Map<String, dynamic>? ??
           data['muscles'] as Map<String, dynamic>? ??
           data['detected_muscles'] as Map<String, dynamic>? ??
           analysisResult['muscle_scores'] as Map<String, dynamic>?;

@@ -268,12 +268,28 @@ class AnalysisLog {
 
     // Priority 1: 신규 데이터 확인
     if (analysisResult != null) {
+      // muscle_usage (VideoRepository에서 저장한 데이터) 우선 확인
+      final muscleUsage =
+          analysisResult['muscle_usage'] as Map<String, dynamic>?;
       final newDetailedMuscleUsage =
           analysisResult['detailed_muscle_usage'] as Map<String, dynamic>?;
       final newBiomechPattern = analysisResult['biomech_pattern']?.toString();
 
-      if (newDetailedMuscleUsage != null && newDetailedMuscleUsage.isNotEmpty) {
-        // 신규 데이터가 있으면 그대로 사용
+      // muscle_usage가 있으면 우선 사용
+      if (muscleUsage != null && muscleUsage.isNotEmpty) {
+        for (final entry in muscleUsage.entries) {
+          final value = entry.value;
+          if (value is num) {
+            detailedMuscleUsage[entry.key] = value.toDouble();
+          }
+        }
+        biomechPattern = newBiomechPattern ?? 'UNKNOWN';
+        debugPrint(
+          '📊 [AnalysisLog] Loaded from muscle_usage: ${detailedMuscleUsage.length} muscles',
+        );
+      } else if (newDetailedMuscleUsage != null &&
+          newDetailedMuscleUsage.isNotEmpty) {
+        // detailed_muscle_usage가 있으면 사용
         for (final entry in newDetailedMuscleUsage.entries) {
           final value = entry.value;
           if (value is num) {

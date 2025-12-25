@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/biomechanics_result.dart';
 import '../utils/safe_calculations.dart';
 import '../utils/delta_calculator.dart';
+import '../utils/muscle_name_mapper.dart';
 import 'joint_contribution_chart.dart';
 
 /// 관절 기여도 카드 위젯
@@ -31,17 +32,7 @@ class JointContributionCard extends StatelessWidget {
   });
 
   String _getJointDisplayName(String jointKey) {
-    const mapping = {
-      'neck': '목',
-      'spine': '척추',
-      'shoulder': '어깨',
-      'elbow': '팔꿈치',
-      'wrist': '손목',
-      'hip': '고관절',
-      'knee': '무릎',
-      'ankle': '발목',
-    };
-    return mapping[jointKey] ?? jointKey;
+    return MuscleNameMapper.getJointDisplayName(jointKey);
   }
 
   @override

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import '../models/biomechanics_result.dart';
 import '../utils/safe_calculations.dart';
+import '../utils/muscle_name_mapper.dart';
 
 /// 관절 기여도 차트 위젯
 /// Contribution %를 파이 차트나 막대 그래프로 시각화
@@ -115,17 +116,7 @@ class JointContributionChart extends StatelessWidget {
   }
 
   String _getJointName(String key) {
-    const names = {
-      'hip': '고관절',
-      'knee': '무릎',
-      'ankle': '발목',
-      'shoulder': '어깨',
-      'elbow': '팔꿈치',
-      'wrist': '손목',
-      'spine': '척추',
-      'neck': '목',
-    };
-    return names[key] ?? key;
+    return MuscleNameMapper.getJointDisplayName(key);
   }
 
   Color _getColorForJoint(String key) {

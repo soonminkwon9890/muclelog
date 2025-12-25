@@ -560,16 +560,7 @@ class _IndividualAnalysisScreenState extends State<IndividualAnalysisScreen> {
 
   /// 관절명 한글 변환
   String _getJointName(String key) {
-    const names = {
-      'hip': '고관절',
-      'knee': '무릎',
-      'ankle': '발목',
-      'shoulder': '어깨',
-      'elbow': '팔꿈치',
-      'wrist': '손목',
-      'spine': '척추',
-    };
-    return names[key] ?? key;
+    return MuscleNameMapper.getJointDisplayName(key);
   }
 
   /// 근육명 한글 변환

@@ -125,10 +125,16 @@ class _UploadFormScreenState extends State<UploadFormScreen> {
         },
       );
 
-      // 🔧 UUID 사용: videoId (String UUID)를 사용하여 ResultScreen으로 이동
-      final videoId = (result['videoId'] ?? '').toString();
-      final logId = (result['logId'] ?? '')
+      // 🔧 서버 응답에서 생성된 ID 추출 (workout_logs.id)
+      // VideoRepository는 {'logId': String, 'videoId': String} 형태로 반환
+      final videoId = (result['videoId'] ?? result['id'] ?? '')
           .toString(); // workout_logs.id (UUID String)
+      final logId = (result['logId'] ?? result['id'] ?? '')
+          .toString(); // workout_logs.id (UUID String)
+
+      debugPrint(
+        '✅ [UploadFormScreen] 업로드 완료 - videoId: $videoId, logId: $logId',
+      );
 
       // 🔧 UUID 유효성 검사: 빈 문자열이면 에러 표시
       if (videoId.isEmpty) {
@@ -144,16 +150,19 @@ class _UploadFormScreenState extends State<UploadFormScreen> {
         return;
       }
 
-      // 결과 화면으로 이동 (videoId 사용)
+      // 결과 화면으로 이동 (실제 분석 결과 화면 - 히스토리 목록과 동일)
       if (mounted) {
+        debugPrint(
+          '🔄 [UploadFormScreen] ResultScreen으로 이동: videoId=$videoId, logId=$logId',
+        );
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => ResultScreen(
-              videoId: videoId, // workout_logs.id (UUID String) 사용
+              videoId: videoId, // workout_logs.id (UUID String)
               logId: logId.isEmpty
                   ? null
-                  : logId, // workout_logs.id (UUID String), 빈 문자열이면 null
-              exerciseName: videoTitle, // exercise_name은 video_title과 동일
+                  : logId, // workout_logs.id (UUID String)
+              exerciseName: videoTitle,
             ),
           ),
         );
