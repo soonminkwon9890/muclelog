@@ -31,6 +31,32 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // 2.5. Timestamp 자동 보정 (누락된 경우)
+    if (body.motionData?.frames) {
+      body.motionData.frames = body.motionData.frames.map(
+        (frame: any, index: number) => {
+          // timestamp가 없거나 유효하지 않으면 자동 보정
+          if (
+            frame.timestamp === undefined ||
+            frame.timestamp === null ||
+            typeof frame.timestamp !== "number"
+          ) {
+            // 30fps 기준: index * 33ms = 초 단위로 변환
+            const timestampMs = index * 33;
+            const timestampSeconds = timestampMs / 1000.0;
+            console.log(
+              `⚠️ [Auto-fill] Frame ${index}: timestamp 누락, 자동 보정: ${timestampSeconds}s (${timestampMs}ms)`
+            );
+            return {
+              ...frame,
+              timestamp: timestampSeconds,
+            };
+          }
+          return frame;
+        }
+      );
+    }
+
     // 3. Server Action 호출
     const result = await analyzeWorkout(
       body.context,
@@ -116,9 +142,7 @@ function validateRequest(body: any): string | null {
 
   // 첫 번째 프레임 검증
   const firstFrame = body.motionData.frames[0];
-  if (!firstFrame.timestamp || typeof firstFrame.timestamp !== "number") {
-    return "Each frame must have a timestamp (number)";
-  }
+  // timestamp 검증 제거: 누락 시 자동 보정 로직에서 처리
 
   if (!Array.isArray(firstFrame.landmarks)) {
     return "Each frame must have landmarks array";
