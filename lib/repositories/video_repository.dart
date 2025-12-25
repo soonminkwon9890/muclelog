@@ -160,8 +160,8 @@ class VideoRepository {
       debugPrint('🤖 [VideoRepository] Gemini 백엔드 분석 시작');
 
       try {
-        // 비디오에서 Pose 추출
-        final poses = await PoseDetectionService.instance
+        // 비디오에서 Pose 추출 (timestamp 포함)
+        final poseResult = await PoseDetectionService.instance
             .extractPosesFromVideoOptimized(
               videoFile: videoFile,
               sampleRate: 5, // 1초에 5프레임
@@ -172,12 +172,19 @@ class VideoRepository {
               },
             );
 
-        debugPrint('✅ [VideoRepository] Pose 추출 완료: ${poses.length}개');
+        final poses = poseResult.poses;
+        final timestamps = poseResult.timestamps;
 
-        // Gemini 백엔드로 분석 요청
+        debugPrint('✅ [VideoRepository] Pose 추출 완료: ${poses.length}개');
+        debugPrint(
+          '✅ [VideoRepository] Timestamp 추출 완료: ${timestamps.length}개',
+        );
+
+        // Gemini 백엔드로 분석 요청 (timestamp 포함)
         final geminiResult = await GeminiWorkoutService.instance
             .analyzeWorkoutWithGemini(
               poses: poses,
+              timestamps: timestamps,
               bodyPart: bodyPart,
               motionType: motionType,
               exerciseName: videoTitle,

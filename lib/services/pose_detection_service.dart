@@ -27,8 +27,8 @@ class PoseDetectionService {
   /// [sampleRate] 프레임 샘플링 비율 (예: 5 = 1초에 5프레임)
   /// [onProgress] 진행률 콜백 (0.0 ~ 1.0)
   ///
-  /// 반환: 추출된 Pose 리스트와 타임스탬프 정보
-  Future<List<Pose>> extractPosesFromVideo({
+  /// 반환: 추출된 Pose 리스트와 각 Pose에 해당하는 timestamp(밀리초) 리스트
+  Future<({List<Pose> poses, List<int> timestamps})> extractPosesFromVideo({
     required File videoFile,
     int sampleRate = 5, // 기본값: 1초에 5프레임
     Function(double)? onProgress,
@@ -62,6 +62,7 @@ class PoseDetectionService {
       debugPrint('   - 샘플링 간격: $frameInterval 프레임');
 
       final allPoses = <Pose>[];
+      final timestamps = <int>[]; // 각 Pose에 해당하는 timestamp (밀리초)
       int processedFrames = 0;
       int extractedPoses = 0;
 
@@ -73,9 +74,8 @@ class PoseDetectionService {
       ) {
         try {
           // 비디오를 특정 시간으로 이동
-          final targetTime = Duration(
-            milliseconds: (frameIndex / fps * 1000).round(),
-          );
+          final targetTimeMs = (frameIndex / fps * 1000).round();
+          final targetTime = Duration(milliseconds: targetTimeMs);
           await videoController.seekTo(targetTime);
           await Future.delayed(const Duration(milliseconds: 100)); // 프레임 로딩 대기
 
@@ -137,6 +137,7 @@ class PoseDetectionService {
             // 최소 10개 이상의 관절이 보여야 유효한 프레임으로 간주
             if (reliableLandmarks >= 10) {
               allPoses.add(pose);
+              timestamps.add(targetTimeMs); // timestamp 추가
               extractedPoses++;
               debugPrint(
                 '✅ [PoseDetectionService] 프레임 $frameIndex: Pose 추출 성공 (신뢰 관절: $reliableLandmarks개)',
@@ -180,7 +181,14 @@ class PoseDetectionService {
         throw Exception('비디오에서 Pose를 추출할 수 없습니다. 비디오에 사람이 보이는지 확인해주세요.');
       }
 
-      return allPoses;
+      // Pose와 timestamp 리스트의 길이가 일치하는지 확인
+      if (allPoses.length != timestamps.length) {
+        throw Exception(
+          'Pose와 timestamp 리스트의 길이가 일치하지 않습니다. (Poses: ${allPoses.length}, Timestamps: ${timestamps.length})',
+        );
+      }
+
+      return (poses: allPoses, timestamps: timestamps);
     } catch (e, stackTrace) {
       debugPrint('❌ [PoseDetectionService] Pose 추출 실패: $e');
       debugPrint('❌ 스택 트레이스: $stackTrace');
@@ -190,7 +198,10 @@ class PoseDetectionService {
 
   /// 더 효율적인 방법: video_thumbnail을 사용하여 프레임 추출
   /// 이 방법은 비디오 전체를 재생하지 않고 특정 시간의 프레임만 추출
-  Future<List<Pose>> extractPosesFromVideoOptimized({
+  ///
+  /// 반환: Pose 리스트와 각 Pose에 해당하는 timestamp(밀리초) 리스트
+  Future<({List<Pose> poses, List<int> timestamps})>
+  extractPosesFromVideoOptimized({
     required File videoFile,
     int sampleRate = 5, // 기본값: 1초에 5프레임
     Function(double)? onProgress,
@@ -219,6 +230,7 @@ class PoseDetectionService {
       debugPrint('   - 비디오 길이: $totalSeconds초');
 
       final allPoses = <Pose>[];
+      final timestamps = <int>[]; // 각 Pose에 해당하는 timestamp (밀리초)
       final tempDir = await getTemporaryDirectory();
       int processedFrames = 0;
       int extractedPoses = 0;
@@ -281,6 +293,7 @@ class PoseDetectionService {
             // 최소 10개 이상의 관절이 보여야 유효한 프레임으로 간주
             if (reliableLandmarks >= 10) {
               allPoses.add(pose);
+              timestamps.add(targetTimeMs); // timestamp 추가
               extractedPoses++;
               debugPrint(
                 '✅ [PoseDetectionService] 샘플 $sampleIndex (${(targetTimeMs / 1000).toStringAsFixed(1)}초): Pose 추출 성공 (신뢰 관절: $reliableLandmarks개)',
@@ -323,7 +336,14 @@ class PoseDetectionService {
         throw Exception('비디오에서 Pose를 추출할 수 없습니다. 비디오에 사람이 보이는지 확인해주세요.');
       }
 
-      return allPoses;
+      // Pose와 timestamp 리스트의 길이가 일치하는지 확인
+      if (allPoses.length != timestamps.length) {
+        throw Exception(
+          'Pose와 timestamp 리스트의 길이가 일치하지 않습니다. (Poses: ${allPoses.length}, Timestamps: ${timestamps.length})',
+        );
+      }
+
+      return (poses: allPoses, timestamps: timestamps);
     } catch (e, stackTrace) {
       debugPrint('❌ [PoseDetectionService] Pose 추출 실패: $e');
       debugPrint('❌ 스택 트레이스: $stackTrace');

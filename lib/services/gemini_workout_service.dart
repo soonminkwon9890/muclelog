@@ -56,7 +56,12 @@ class GeminiWorkoutService {
 
   /// Pose 리스트를 Motion Data JSON 형식으로 변환
   /// 🔧 AI Hallucination 방지: likelihood < 0.6인 관절은 제외
-  Map<String, dynamic> _convertPosesToMotionData(List<Pose> poses) {
+  /// [poses] 분석할 포즈 리스트
+  /// [timestamps] 각 포즈에 해당하는 timestamp 리스트 (밀리초). null이면 인덱스 기반으로 계산
+  Map<String, dynamic> _convertPosesToMotionData(
+    List<Pose> poses, {
+    List<int>? timestamps,
+  }) {
     final frames = <Map<String, dynamic>>[];
     final allVisibleJoints = <String>{};
 
@@ -97,10 +102,13 @@ class GeminiWorkoutService {
         }
       }
 
-      frames.add({
-        'timestamp': i * 0.033, // 30fps 기준 (대략적)
-        'landmarks': landmarks,
-      });
+      // timestamp 계산: timestamps가 제공되면 사용, 없으면 인덱스 기반으로 계산
+      final timestamp = timestamps != null && i < timestamps.length
+          ? timestamps[i] /
+                1000.0 // 밀리초를 초로 변환
+          : i * 0.033; // 30fps 기준 (대략적, fallback)
+
+      frames.add({'timestamp': timestamp, 'landmarks': landmarks});
     }
 
     // 🔍 디버그: 보이는 관절 목록 출력
@@ -192,6 +200,7 @@ class GeminiWorkoutService {
   /// Next.js API를 호출하여 운동 분석 수행
   ///
   /// [poses] 분석할 포즈 리스트
+  /// [timestamps] 각 포즈에 해당하는 timestamp 리스트 (밀리초). null이면 인덱스 기반으로 계산
   /// [bodyPart] 운동 부위
   /// [motionType] 운동 방식
   /// [exerciseName] 운동 이름
@@ -201,6 +210,7 @@ class GeminiWorkoutService {
   /// 반환: 분석 결과 (AnalysisResult 형식)
   Future<Map<String, dynamic>> analyzeWorkoutWithGemini({
     required List<Pose> poses,
+    List<int>? timestamps,
     required BodyPart bodyPart,
     required MotionType motionType,
     required String exerciseName,
@@ -210,8 +220,11 @@ class GeminiWorkoutService {
     try {
       debugPrint('🚀 [GeminiWorkoutService] Next.js API 호출 시작');
 
-      // Motion Data 변환
-      final motionData = _convertPosesToMotionData(poses);
+      // Motion Data 변환 (timestamp 포함)
+      final motionData = _convertPosesToMotionData(
+        poses,
+        timestamps: timestamps,
+      );
       debugPrint(
         '📊 [GeminiWorkoutService] Motion Data 변환 완료: ${poses.length}개 프레임',
       );
