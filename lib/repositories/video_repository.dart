@@ -274,9 +274,95 @@ class VideoRepository {
     }
   }
 
-  /// Pose 리스트를 사용하여 근육 활성도 계산
-  /// [poses] 추출된 Pose 리스트
-  /// [timestamps] 각 Pose에 해당하는 timestamp 리스트
+  /// 단일 Pose에서 관절의 절대 각도 계산
+  /// [pose] 현재 프레임의 Pose
+  /// 반환: 관절별 절대 각도 맵 (도 단위)
+  Map<String, double?> _calculateJointAbsoluteAngles(Pose pose) {
+    final angles = <String, double?>{};
+
+    try {
+      // 어깨 각도 (왼쪽 어깨-팔꿈치-손목)
+      final leftShoulder = pose.landmarks[PoseLandmarkType.leftShoulder];
+      final leftElbow = pose.landmarks[PoseLandmarkType.leftElbow];
+      final leftWrist = pose.landmarks[PoseLandmarkType.leftWrist];
+      if (leftShoulder != null && leftElbow != null && leftWrist != null) {
+        angles['shoulder'] = _calculateAngle(
+          leftShoulder,
+          leftElbow,
+          leftWrist,
+        );
+      }
+
+      // 무릎 각도 (고관절-무릎-발목)
+      final leftHip = pose.landmarks[PoseLandmarkType.leftHip];
+      final leftKnee = pose.landmarks[PoseLandmarkType.leftKnee];
+      final leftAnkle = pose.landmarks[PoseLandmarkType.leftAnkle];
+      if (leftHip != null && leftKnee != null && leftAnkle != null) {
+        angles['knee'] = _calculateAngle(leftHip, leftKnee, leftAnkle);
+      }
+
+      // 고관절 각도 (어깨-고관절-무릎)
+      final rightShoulder = pose.landmarks[PoseLandmarkType.rightShoulder];
+      final rightHip = pose.landmarks[PoseLandmarkType.rightHip];
+      final rightKnee = pose.landmarks[PoseLandmarkType.rightKnee];
+      if (rightShoulder != null && rightHip != null && rightKnee != null) {
+        angles['hip'] = _calculateAngle(rightShoulder, rightHip, rightKnee);
+      }
+
+      // 팔꿈치 각도 (어깨-팔꿈치-손목)
+      final rightElbow = pose.landmarks[PoseLandmarkType.rightElbow];
+      final rightWrist = pose.landmarks[PoseLandmarkType.rightWrist];
+      if (leftShoulder != null && rightElbow != null && rightWrist != null) {
+        angles['elbow'] = _calculateAngle(leftShoulder, rightElbow, rightWrist);
+      }
+
+      // 나머지 관절들은 기본값 null
+      angles['neck'] = null;
+      angles['spine'] = null;
+      angles['wrist'] = null;
+      angles['ankle'] = null;
+    } catch (e) {
+      debugPrint('⚠️ [VideoRepository] 절대 각도 계산 오류: $e');
+    }
+
+    return angles;
+  }
+
+  /// 반복 패턴 감지 (등장성 운동: 증가-감소 패턴)
+  /// [angles] 관절 각도 시퀀스
+  /// 반환: 반복 패턴이 감지되면 true
+  bool _detectRepetitionPattern(List<double> angles) {
+    if (angles.length < 3) {
+      return false;
+    }
+
+    // 🔧 Peak-to-Peak 패턴 감지: 최소 2번 이상 증가-감소 패턴이 있어야 함
+    int directionChanges = 0; // 방향 전환 횟수
+    bool? prevDirection; // true: 증가, false: 감소, null: 초기
+
+    for (int i = 1; i < angles.length; i++) {
+      final diff = angles[i] - angles[i - 1];
+      final threshold = 2.0; // 2도 이상 변화만 유의미한 것으로 간주
+
+      if (diff.abs() < threshold) {
+        continue; // 미세한 변화는 무시
+      }
+
+      final currentDirection = diff > 0; // 증가면 true, 감소면 false
+
+      if (prevDirection != null && prevDirection != currentDirection) {
+        // 방향이 바뀌었음 (증가 -> 감소 또는 감소 -> 증가)
+        directionChanges++;
+      }
+
+      prevDirection = currentDirection;
+    }
+
+    // 🔧 방향 전환이 2번 이상이면 반복 패턴으로 간주
+    // (예: 증가 -> 감소 -> 증가 = 2번 전환 = 1회 반복)
+    return directionChanges >= 2;
+  }
+
   /// [motionType] 운동 방식 타입
   /// 반환: 근육별 활성도 맵 (`Map<String, double>`)
   Future<Map<String, double>> _calculateMuscleUsageFromPoses({
@@ -288,10 +374,25 @@ class VideoRepository {
       return {};
     }
 
-    final muscleUsageMap = <String, double>{};
-    final jointDeltasMap = <String, List<double>>{};
+    // 🔧 1. 프레임 트리밍: 앞쪽 10%와 뒤쪽 10% 제거 (준비/마무리 동작 제거)
+    final totalFrames = poses.length;
+    final trimStart = (totalFrames * 0.1).floor();
+    final trimEnd = (totalFrames * 0.9).floor();
+    final trimmedPoses = poses.sublist(trimStart, trimEnd);
 
-    // 모든 관절에 대해 초기화
+    if (trimmedPoses.length < 2) {
+      debugPrint('⚠️ [VideoRepository] 트리밍 후 프레임이 부족함: ${trimmedPoses.length}');
+      return {};
+    }
+
+    debugPrint(
+      '✅ [VideoRepository] 프레임 트리밍: 전체 $totalFrames개 -> 분석 ${trimmedPoses.length}개 (앞 $trimStart개, 뒤 ${totalFrames - trimEnd}개 제거)',
+    );
+
+    final muscleUsageMap = <String, double>{};
+
+    // 🔧 2. 각 관절의 각도 시퀀스 계산 (전체 프레임에 대해)
+    final jointAnglesMap = <String, List<double>>{};
     final jointNames = [
       'neck',
       'spine',
@@ -302,46 +403,72 @@ class VideoRepository {
       'knee',
       'ankle',
     ];
+
     for (final jointName in jointNames) {
-      jointDeltasMap[jointName] = [];
+      jointAnglesMap[jointName] = [];
     }
 
-    // Pose 리스트를 순회하면서 관절 각도 변화 계산
-    for (int i = 1; i < poses.length; i++) {
-      final prevPose = poses[i - 1];
-      final currPose = poses[i];
-
-      // 각 관절의 각도 변화 계산
-      final angleChanges = _calculateJointAngleChanges(prevPose, currPose);
-
-      // 관절별로 변화량 누적
-      for (final entry in angleChanges.entries) {
+    // 🔧 각 프레임에서 관절 각도 계산 (절대 각도)
+    for (final pose in trimmedPoses) {
+      final jointAngles = _calculateJointAbsoluteAngles(pose);
+      for (final entry in jointAngles.entries) {
         final jointName = entry.key;
-        final delta = entry.value;
-        if (delta != null && delta.abs() > 0.1) {
-          // 유의미한 변화만 저장
-          jointDeltasMap[jointName]?.add(delta.abs());
+        final angle = entry.value;
+        if (angle != null) {
+          jointAnglesMap[jointName]?.add(angle);
         }
       }
     }
 
-    // 관절별 평균 변화량 계산 (jointDeltas)
+    // 🔧 3. Peak-to-Peak ROM 계산 및 최소 ROM 필터 (15도 미만 제거)
     final jointDeltas = <String, double>{};
-    for (final entry in jointDeltasMap.entries) {
+    final jointPeakToPeakMap = <String, double>{};
+
+    for (final entry in jointAnglesMap.entries) {
       final jointName = entry.key;
-      final deltas = entry.value;
-      if (deltas.isNotEmpty) {
-        final avgDelta = deltas.reduce((a, b) => a + b) / deltas.length;
-        jointDeltas[jointName] = avgDelta;
-      } else {
+      final angles = entry.value;
+
+      if (angles.isEmpty) {
         jointDeltas[jointName] = 0.0;
+        jointPeakToPeakMap[jointName] = 0.0;
+        continue;
+      }
+
+      // Peak-to-Peak 계산: 최고점 - 최저점
+      final maxAngle = angles.reduce((a, b) => a > b ? a : b);
+      final minAngle = angles.reduce((a, b) => a < b ? a : b);
+      final peakToPeak = maxAngle - minAngle;
+      jointPeakToPeakMap[jointName] = peakToPeak;
+
+      // 🔧 최소 ROM 필터: 15도 미만인 관절은 0점 처리
+      if (peakToPeak < 15.0) {
+        jointDeltas[jointName] = 0.0;
+        debugPrint(
+          '🔇 [VideoRepository] 관절 $jointName: Peak-to-Peak ${peakToPeak.toStringAsFixed(1)}° < 15° -> 0점 처리 (미세 움직임 무시)',
+        );
+      } else {
+        // 🔧 등장성 패턴 감지: 증가-감소 패턴 확인
+        final hasRepetitionPattern = _detectRepetitionPattern(angles);
+        if (hasRepetitionPattern) {
+          // 반복 패턴이 있으면 Peak-to-Peak을 그대로 사용
+          jointDeltas[jointName] = peakToPeak;
+          debugPrint(
+            '✅ [VideoRepository] 관절 $jointName: Peak-to-Peak ${peakToPeak.toStringAsFixed(1)}° (반복 패턴 감지)',
+          );
+        } else {
+          // 단순히 한 번만 움직인 경우는 점수를 낮춤 (50% 감소)
+          jointDeltas[jointName] = peakToPeak * 0.5;
+          debugPrint(
+            '⚠️ [VideoRepository] 관절 $jointName: Peak-to-Peak ${peakToPeak.toStringAsFixed(1)}° (반복 패턴 없음 -> 50% 감소)',
+          );
+        }
       }
     }
 
-    // 대표 프레임 선택 (첫 번째와 중간 프레임)
-    final midIndex = (poses.length / 2).floor();
-    final prevPose = poses[0];
-    final currPose = poses[midIndex];
+    // 🔧 4. 대표 프레임 선택 (트리밍된 프레임의 시작과 중간)
+    final trimmedMidIndex = (trimmedPoses.length / 2).floor();
+    final prevPose = trimmedPoses[0];
+    final currPose = trimmedPoses[trimmedMidIndex];
 
     // MuscleMetricUtils를 사용하여 근육 활성도 계산
     try {
@@ -351,8 +478,9 @@ class VideoRepository {
         jointDeltas: jointDeltas,
       );
 
-      // 결과에서 muscleUsage 추출
-      final muscleUsage = analysisResult['muscleUsage'] as Map<String, double>?;
+      // 결과에서 detailed_muscle_usage 추출 (performPhysicsBasedAnalysis의 반환값)
+      final muscleUsage =
+          analysisResult['detailed_muscle_usage'] as Map<String, double>?;
       if (muscleUsage != null) {
         muscleUsageMap.addAll(muscleUsage);
       }
@@ -362,144 +490,6 @@ class VideoRepository {
     }
 
     return muscleUsageMap;
-  }
-
-  /// 두 Pose 간의 관절 각도 변화 계산
-  /// [prevPose] 이전 프레임의 Pose
-  /// [currPose] 현재 프레임의 Pose
-  /// 반환: 관절별 각도 변화 맵
-  Map<String, double?> _calculateJointAngleChanges(
-    Pose prevPose,
-    Pose currPose,
-  ) {
-    final angleChanges = <String, double?>{};
-
-    // 각 관절의 각도 변화 계산
-    // MuscleUsageAnalysisService의 로직을 참고하여 간단하게 구현
-    try {
-      // 어깨 각도 변화
-      final prevLeftShoulder =
-          prevPose.landmarks[PoseLandmarkType.leftShoulder];
-      final prevRightShoulder =
-          prevPose.landmarks[PoseLandmarkType.rightShoulder];
-      final currLeftShoulder =
-          currPose.landmarks[PoseLandmarkType.leftShoulder];
-      final currRightShoulder =
-          currPose.landmarks[PoseLandmarkType.rightShoulder];
-
-      if (prevLeftShoulder != null &&
-          prevRightShoulder != null &&
-          currLeftShoulder != null &&
-          currRightShoulder != null) {
-        final prevAngle = _calculateAngle(
-          prevLeftShoulder,
-          prevRightShoulder,
-          prevLeftShoulder,
-        );
-        final currAngle = _calculateAngle(
-          currLeftShoulder,
-          currRightShoulder,
-          currLeftShoulder,
-        );
-        angleChanges['shoulder'] = (currAngle - prevAngle).abs();
-      }
-
-      // 무릎 각도 변화
-      final prevLeftKnee = prevPose.landmarks[PoseLandmarkType.leftKnee];
-      final prevLeftHip = prevPose.landmarks[PoseLandmarkType.leftHip];
-      final prevLeftAnkle = prevPose.landmarks[PoseLandmarkType.leftAnkle];
-      final currLeftKnee = currPose.landmarks[PoseLandmarkType.leftKnee];
-      final currLeftHip = currPose.landmarks[PoseLandmarkType.leftHip];
-      final currLeftAnkle = currPose.landmarks[PoseLandmarkType.leftAnkle];
-
-      if (prevLeftKnee != null &&
-          prevLeftHip != null &&
-          prevLeftAnkle != null &&
-          currLeftKnee != null &&
-          currLeftHip != null &&
-          currLeftAnkle != null) {
-        final prevAngle = _calculateAngle(
-          prevLeftHip,
-          prevLeftKnee,
-          prevLeftAnkle,
-        );
-        final currAngle = _calculateAngle(
-          currLeftHip,
-          currLeftKnee,
-          currLeftAnkle,
-        );
-        angleChanges['knee'] = (currAngle - prevAngle).abs();
-      }
-
-      // 고관절 각도 변화
-      final prevRightHip = prevPose.landmarks[PoseLandmarkType.rightHip];
-      final currRightHip = currPose.landmarks[PoseLandmarkType.rightHip];
-      final prevRightKnee = prevPose.landmarks[PoseLandmarkType.rightKnee];
-      final currRightKnee = currPose.landmarks[PoseLandmarkType.rightKnee];
-
-      if (prevRightHip != null &&
-          prevRightKnee != null &&
-          currRightHip != null &&
-          currRightKnee != null) {
-        final prevAngle = _calculateAngle(
-          prevRightHip,
-          prevRightKnee,
-          prevRightHip,
-        );
-        final currAngle = _calculateAngle(
-          currRightHip,
-          currRightKnee,
-          currRightHip,
-        );
-        angleChanges['hip'] = (currAngle - prevAngle).abs();
-      }
-
-      // 팔꿈치 각도 변화
-      final prevLeftElbow = prevPose.landmarks[PoseLandmarkType.leftElbow];
-      final prevLeftWrist = prevPose.landmarks[PoseLandmarkType.leftWrist];
-      final currLeftElbow = currPose.landmarks[PoseLandmarkType.leftElbow];
-      final currLeftWrist = currPose.landmarks[PoseLandmarkType.leftWrist];
-
-      if (prevLeftElbow != null &&
-          prevLeftWrist != null &&
-          currLeftElbow != null &&
-          currLeftWrist != null) {
-        final prevAngle = _calculateAngle(
-          prevLeftElbow,
-          prevLeftWrist,
-          prevLeftElbow,
-        );
-        final currAngle = _calculateAngle(
-          currLeftElbow,
-          currLeftWrist,
-          currLeftElbow,
-        );
-        angleChanges['elbow'] = (currAngle - prevAngle).abs();
-      }
-
-      // 나머지 관절들도 유사하게 계산 (간단화를 위해 기본값 0.0)
-      angleChanges['neck'] = 0.0;
-      angleChanges['spine'] = 0.0;
-      angleChanges['wrist'] = 0.0;
-      angleChanges['ankle'] = 0.0;
-    } catch (e) {
-      debugPrint('⚠️ [VideoRepository] 관절 각도 계산 오류: $e');
-      // 오류 발생 시 모든 관절을 0.0으로 설정
-      for (final jointName in [
-        'neck',
-        'spine',
-        'shoulder',
-        'elbow',
-        'wrist',
-        'hip',
-        'knee',
-        'ankle',
-      ]) {
-        angleChanges[jointName] = 0.0;
-      }
-    }
-
-    return angleChanges;
   }
 
   /// 세 점을 사용하여 각도 계산 (도 단위)
