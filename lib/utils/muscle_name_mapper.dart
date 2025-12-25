@@ -53,6 +53,13 @@ class MuscleNameMapper {
     'right_elbow': '오른쪽 팔꿈치',
     'left_wrist': '왼쪽 손목',
     'right_wrist': '오른쪽 손목',
+    // 기본 관절 키 (hip_L, knee_R 등 처리용)
+    'hip': '고관절',
+    'knee': '무릎',
+    'ankle': '발목',
+    'shoulder': '어깨',
+    'elbow': '팔꿈치',
+    'wrist': '손목',
     // 기존 관절 키 (하위 호환성)
     'neck': '경추',
     'spine': '척추',
@@ -94,9 +101,51 @@ class MuscleNameMapper {
   }
 
   // 5. 관절명 한글화 (muscle_joint_mapper에서 통합)
+  /// 🔧 hip_L, knee_R 같은 형식도 처리
   static String getJointDisplayName(String jointKey) {
+    if (jointKey.isEmpty) return "-";
+
     final lowerKey = jointKey.toLowerCase();
-    return jointMappingTable[lowerKey] ?? jointKey; // 매핑 없으면 원본 반환
+
+    // 1. 직접 매핑 확인 (left_hip, right_knee 등)
+    final directMatch = jointMappingTable[lowerKey];
+    if (directMatch != null) {
+      return directMatch;
+    }
+
+    // 2. hip_L, knee_R 같은 형식 처리
+    // 패턴: {joint}_{L|R} 또는 {joint}_{left|right}
+    String? jointName;
+    String? side;
+
+    // _L 또는 _R로 끝나는 경우
+    if (lowerKey.endsWith('_l') || lowerKey.endsWith('_left')) {
+      side = '왼쪽 ';
+      jointName = lowerKey.replaceAll(RegExp(r'_l$|_left$'), '');
+    } else if (lowerKey.endsWith('_r') || lowerKey.endsWith('_right')) {
+      side = '오른쪽 ';
+      jointName = lowerKey.replaceAll(RegExp(r'_r$|_right$'), '');
+    } else {
+      // 접두어가 있는 경우 (left_hip, right_knee)
+      if (lowerKey.startsWith('left_')) {
+        side = '왼쪽 ';
+        jointName = lowerKey.replaceAll('left_', '');
+      } else if (lowerKey.startsWith('right_')) {
+        side = '오른쪽 ';
+        jointName = lowerKey.replaceAll('right_', '');
+      } else {
+        jointName = lowerKey;
+      }
+    }
+
+    // 3. 관절명 매핑 확인
+    final koreanJointName = jointMappingTable[jointName];
+    if (koreanJointName != null) {
+      return side != null ? side + koreanJointName : koreanJointName;
+    }
+
+    // 4. 매핑 없으면 원본 반환
+    return jointKey;
   }
 
   // 6. 근육인지 확인 (muscle_joint_mapper에서 통합)

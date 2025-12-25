@@ -656,10 +656,49 @@ class _ResultScreenState extends State<ResultScreen>
   }
 
   /// 필터링된 근육 데이터 가져오기
+  /// 🔧 우선순위: muscle_usage (VideoRepository에서 저장) > muscleScores (백엔드) > 재계산
   Map<String, double> _getFilteredMuscleData() {
     final muscleData = <String, double>{};
 
-    if (_biomechanicsResult!.muscleScores != null &&
+    // 🔧 1순위: analysis_result['muscle_usage'] 직접 사용 (VideoRepository에서 저장한 데이터)
+    if (_rawAnalysisData != null) {
+      try {
+        final muscleUsageRaw =
+            _rawAnalysisData!['muscle_usage'] as Map<String, dynamic>?;
+        if (muscleUsageRaw != null && muscleUsageRaw.isNotEmpty) {
+          for (final entry in muscleUsageRaw.entries) {
+            final muscleKey = entry.key;
+            final value = entry.value;
+            double? score;
+
+            if (value is num) {
+              score = value.toDouble();
+            } else if (value is String) {
+              score = double.tryParse(value);
+            }
+
+            if (score != null &&
+                score > 0 &&
+                !score.isNaN &&
+                !score.isInfinite) {
+              // 지능형 필터링 적용
+              if (_isValidMuscle(muscleKey, score)) {
+                muscleData[muscleKey] = score;
+              }
+            }
+          }
+          debugPrint(
+            '✅ [ResultScreen] muscle_usage에서 ${muscleData.length}개 근육 로드',
+          );
+        }
+      } catch (e) {
+        debugPrint('⚠️ [ResultScreen] muscle_usage 파싱 실패: $e');
+      }
+    }
+
+    // 🔧 2순위: muscleScores (백엔드 데이터) - muscle_usage가 없을 때만 사용
+    if (muscleData.isEmpty &&
+        _biomechanicsResult!.muscleScores != null &&
         _biomechanicsResult!.muscleScores!.isNotEmpty) {
       for (final entry in _biomechanicsResult!.muscleScores!.entries) {
         final muscleKey = entry.key;
@@ -686,6 +725,7 @@ class _ResultScreenState extends State<ResultScreen>
           }
         }
       }
+      debugPrint('✅ [ResultScreen] muscleScores에서 ${muscleData.length}개 근육 로드');
     }
 
     return muscleData;

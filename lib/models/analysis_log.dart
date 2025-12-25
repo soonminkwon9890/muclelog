@@ -64,6 +64,9 @@ class AnalysisLog {
   final Map<String, double> detailedMuscleUsage; // non-nullable, 기본값 {}
   final String biomechPattern; // 기본값 "UNKNOWN"
 
+  // 🔧 VideoRepository에서 저장한 muscle_usage 데이터 (nullable)
+  final Map<String, double>? muscleUsage;
+
   AnalysisLog({
     required this.logId,
     required this.userId,
@@ -84,6 +87,7 @@ class AnalysisLog {
     this.bodyPart,
     Map<String, double>? detailedMuscleUsage,
     String? biomechPattern,
+    this.muscleUsage,
   }) : exerciseType = exerciseType ?? ExerciseType.full,
        motionType = motionType ?? MotionType.isotonic,
        detailedMuscleUsage = detailedMuscleUsage ?? {},
@@ -265,24 +269,44 @@ class AnalysisLog {
     // 새로운 데이터 구조 파싱 (우선순위 기반)
     Map<String, double> detailedMuscleUsage = {};
     String biomechPattern = 'UNKNOWN';
+    Map<String, double>? muscleUsage; // 🔧 VideoRepository에서 저장한 muscle_usage
 
     // Priority 1: 신규 데이터 확인
     if (analysisResult != null) {
-      // muscle_usage (VideoRepository에서 저장한 데이터) 우선 확인
-      final muscleUsage =
-          analysisResult['muscle_usage'] as Map<String, dynamic>?;
+      // 🔧 muscle_usage (VideoRepository에서 저장한 데이터) 파싱
+      try {
+        final muscleUsageRaw =
+            analysisResult['muscle_usage'] as Map<String, dynamic>?;
+        if (muscleUsageRaw != null && muscleUsageRaw.isNotEmpty) {
+          muscleUsage = <String, double>{};
+          for (final entry in muscleUsageRaw.entries) {
+            final value = entry.value;
+            if (value is num) {
+              muscleUsage[entry.key] = value.toDouble();
+            } else if (value is String) {
+              // 문자열인 경우 숫자로 변환 시도
+              final parsed = double.tryParse(value);
+              if (parsed != null) {
+                muscleUsage[entry.key] = parsed;
+              }
+            }
+          }
+          debugPrint(
+            '✅ [AnalysisLog] muscle_usage 파싱 완료: ${muscleUsage.length}개 근육',
+          );
+        }
+      } catch (e) {
+        debugPrint('⚠️ [AnalysisLog] muscle_usage 파싱 실패: $e');
+        muscleUsage = null;
+      }
+
       final newDetailedMuscleUsage =
           analysisResult['detailed_muscle_usage'] as Map<String, dynamic>?;
       final newBiomechPattern = analysisResult['biomech_pattern']?.toString();
 
-      // muscle_usage가 있으면 우선 사용
+      // muscle_usage가 있으면 detailedMuscleUsage에도 복사
       if (muscleUsage != null && muscleUsage.isNotEmpty) {
-        for (final entry in muscleUsage.entries) {
-          final value = entry.value;
-          if (value is num) {
-            detailedMuscleUsage[entry.key] = value.toDouble();
-          }
-        }
+        detailedMuscleUsage = Map<String, double>.from(muscleUsage);
         biomechPattern = newBiomechPattern ?? 'UNKNOWN';
         debugPrint(
           '📊 [AnalysisLog] Loaded from muscle_usage: ${detailedMuscleUsage.length} muscles',
@@ -358,6 +382,7 @@ class AnalysisLog {
       bodyPart: bodyPart,
       detailedMuscleUsage: detailedMuscleUsage,
       biomechPattern: biomechPattern,
+      muscleUsage: muscleUsage, // 🔧 VideoRepository에서 저장한 muscle_usage
     );
   }
 
