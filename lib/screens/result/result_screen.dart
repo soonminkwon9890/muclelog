@@ -6,6 +6,7 @@ import '../../models/motion_type.dart';
 import '../../models/biomechanics_result.dart';
 import '../../utils/safe_calculations.dart';
 import '../../utils/muscle_name_mapper.dart';
+import '../../utils/muscle_metric_utils.dart';
 
 /// 분석 결과 화면
 /// 영상 위에 서버에서 분석 결과를 표시하는 화면
@@ -35,18 +36,16 @@ class _ResultScreenState extends State<ResultScreen>
   // Core Engine 데이터 (BiomechanicsResult 모델 사용)
   BiomechanicsResult? _biomechanicsResult;
 
+  // 원본 분석 데이터 (rom_data, motion_data 접근용)
+  Map<String, dynamic>? _rawAnalysisData;
+
   // UI 상태
   int _currentMode = 0; // 0: 근육, 1: 관절
-  String? _highlightedMuscle; // 클릭 시 하이라이트
-  String? _highlightedJoint; // 클릭 시 하이라이트
-  bool _showDebugMode = false; // 디버그 모드 토글
 
   // 🔧 TabController 명시적 관리
   late TabController _tabController;
 
   // 하위 호환성 (기존 데이터) - analysis_json 파싱 시에만 사용
-  // ignore: unused_field
-  // List<AnalysisResult>? _analysisResults; // 삭제된 모델 - 더 이상 사용하지 않음
   // ignore: unused_field
   String? _exerciseType;
   // ignore: unused_field
@@ -163,6 +162,9 @@ class _ResultScreenState extends State<ResultScreen>
       }
 
       if (analysisData != null) {
+        // 원본 데이터 저장 (rom_data, motion_data 접근용)
+        _rawAnalysisData = analysisData;
+
         // EnhancedAnalysisResult 형식으로 파싱
         try {
           _biomechanicsResult = BiomechanicsResult.fromAnalysisResult(
@@ -201,6 +203,7 @@ class _ResultScreenState extends State<ResultScreen>
       } else {
         // 백엔드 데이터가 없으면 null로 설정 (레거시 Fallback 없음)
         _biomechanicsResult = null;
+        _rawAnalysisData = null;
         debugPrint(
           '⚠️ [ResultScreen] workout_logs에서 분석 결과를 찾을 수 없음 (ai_analysis_result, analysis_result 모두 null)',
         );
@@ -350,18 +353,6 @@ class _ResultScreenState extends State<ResultScreen>
         foregroundColor: Colors.black87,
         elevation: 0,
         actions: [
-          // 디버그 모드 토글
-          IconButton(
-            icon: Icon(
-              _showDebugMode ? Icons.bug_report : Icons.bug_report_outlined,
-            ),
-            tooltip: '디버그 모드',
-            onPressed: () {
-              setState(() {
-                _showDebugMode = !_showDebugMode;
-              });
-            },
-          ),
           IconButton(
             icon: const Icon(Icons.save),
             tooltip: '기록 저장',
@@ -369,13 +360,16 @@ class _ResultScreenState extends State<ResultScreen>
           ),
         ],
       ),
-      // 🔧 미니멀리즘 레이아웃: 비디오 상단, 데이터 리스트 하단
+      // 🔧 레이아웃: 비디오 플레이어 아래, 비교 분석 카드, 탭
       body: Column(
         children: [
-          // [Area 1] Video Section (Fixed Header) - 깔끔한 비디오만 표시
+          // [Area 1] Video Section (Fixed Header)
           Expanded(flex: 2, child: _buildVideoPlayer()),
 
-          // [Area 2] Tab & Content Section (Expanded Body)
+          // [Area 2] Comparison Card (비디오 플레이어 아래, 탭 위)
+          _buildComparisonCard(),
+
+          // [Area 3] Tab & Content Section (Expanded Body)
           Expanded(
             flex: 3,
             child: Column(
@@ -384,8 +378,8 @@ class _ResultScreenState extends State<ResultScreen>
                 TabBar(
                   controller: _tabController,
                   tabs: const [
-                    Tab(text: '근육'),
-                    Tab(text: '관절'),
+                    Tab(text: '근육 분석'),
+                    Tab(text: '관절 분석'),
                   ],
                   labelColor: Colors.black87,
                   unselectedLabelColor: Colors.grey,
@@ -400,9 +394,9 @@ class _ResultScreenState extends State<ResultScreen>
                       physics: const NeverScrollableScrollPhysics(),
                       children: [
                         // 근육 탭: 리스트만
-                        _buildMuscleAccordionList(),
+                        _buildMuscleTab(),
                         // 관절 탭: 리스트만
-                        _buildJointAccordionList(),
+                        _buildJointTab(),
                       ],
                     ),
                   ),
@@ -463,14 +457,115 @@ class _ResultScreenState extends State<ResultScreen>
     );
   }
 
-  // 🔧 히트맵 섹션 제거 (미니멀리즘 UI)
+  /// 비교 분석 카드 (동적 랭킹 방식)
+  Widget _buildComparisonCard() {
+    if (_biomechanicsResult == null) {
+      return const SizedBox.shrink();
+    }
 
-  // 🔧 디버그 데이터 뷰 제거 (미니멀리즘 UI)
+    final List<String> comparisonTexts = [];
 
-  // 🔧 _buildModeSelector 제거: TabBar로 대체됨
+    // 근육 비교: 1위 vs 2위
+    if (_biomechanicsResult!.muscleScores != null &&
+        _biomechanicsResult!.muscleScores!.isNotEmpty) {
+      final sortedMuscles = _biomechanicsResult!.muscleScores!.entries.toList()
+        ..sort((a, b) => b.value.score.compareTo(a.value.score));
 
-  /// 근육 모드 아코디언 리스트 (Core Engine 데이터 사용)
-  Widget _buildMuscleAccordionList() {
+      if (sortedMuscles.length >= 2) {
+        final first = sortedMuscles[0];
+        final second = sortedMuscles[1];
+        final firstScore = first.value.score;
+        final secondScore = second.value.score;
+
+        if (firstScore > 0 && secondScore > 0) {
+          final diffPercent = ((firstScore - secondScore) / secondScore * 100)
+              .clamp(0.0, 1000.0);
+          final firstName = MuscleNameMapper.localize(first.key);
+          final secondName = MuscleNameMapper.localize(second.key);
+          comparisonTexts.add(
+            '현재 동작에서는 $firstName이 $secondName보다 ${diffPercent.toStringAsFixed(1)}% 더 높은 활성도를 보였습니다.',
+          );
+        }
+      }
+    }
+
+    // 관절 비교: 1위 vs 2위
+    if (_biomechanicsResult!.jointStats != null &&
+        _biomechanicsResult!.jointStats!.isNotEmpty) {
+      final sortedJoints = _biomechanicsResult!.jointStats!.entries.toList()
+        ..sort(
+          (a, b) =>
+              b.value.contributionScore.compareTo(a.value.contributionScore),
+        );
+
+      if (sortedJoints.length >= 2) {
+        final first = sortedJoints[0];
+        final second = sortedJoints[1];
+        final firstScore = first.value.contributionScore;
+        final secondScore = second.value.contributionScore;
+
+        if (firstScore > 0 && secondScore > 0) {
+          final diffPercent = ((firstScore - secondScore) / secondScore * 100)
+              .clamp(0.0, 1000.0);
+          final firstName = MuscleNameMapper.getJointDisplayName(first.key);
+          final secondName = MuscleNameMapper.getJointDisplayName(second.key);
+          comparisonTexts.add(
+            '현재 동작에서는 $firstName이 $secondName보다 ${diffPercent.toStringAsFixed(1)}% 더 많이 사용되었습니다.',
+          );
+        }
+      }
+    }
+
+    if (comparisonTexts.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      margin: const EdgeInsets.all(16.0),
+      padding: const EdgeInsets.all(16.0),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.shade200, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.analytics, color: Colors.blue.shade700),
+              const SizedBox(width: 8),
+              Text(
+                '비교 분석',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...comparisonTexts.map(
+            (text) => Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: Text(
+                text,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade800,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 근육 탭 UI (3단계 폴백 전략, Progress Bar, 색상 코딩)
+  Widget _buildMuscleTab() {
     if (_biomechanicsResult == null) {
       return Container(
         color: Colors.white,
@@ -489,14 +584,30 @@ class _ResultScreenState extends State<ResultScreen>
     if (_biomechanicsResult!.muscleScores != null &&
         _biomechanicsResult!.muscleScores!.isNotEmpty) {
       for (final entry in _biomechanicsResult!.muscleScores!.entries) {
-        // 0보다 큰 값만 표시
-        if (entry.value.score > 0) {
-          muscleData[entry.key] = entry.value.score;
+        final muscleKey = entry.key;
+        final dbScore = entry.value.score;
+
+        // 3단계 폴백 전략으로 최종 점수 계산
+        double finalScore = dbScore;
+
+        // 1순위: 재계산 시도
+        if (dbScore == 0.0 || dbScore.isNaN || dbScore.isInfinite) {
+          final recalculatedScore = _recalculateMuscleScore(muscleKey);
+          if (recalculatedScore != null && recalculatedScore > 0) {
+            finalScore = recalculatedScore;
+          }
+        }
+
+        // 2순위: DB 값 사용 (이미 finalScore에 할당됨)
+
+        // 3순위: 포맷팅 (값이 없으면 "-" 표시하도록 필터링)
+        if (finalScore > 0 && !finalScore.isNaN && !finalScore.isInfinite) {
+          muscleData[muscleKey] = finalScore;
         }
       }
     }
 
-    // muscleData가 비어있으면 N/A 표시 (레거시 Fallback 없음)
+    // muscleData가 비어있으면 N/A 표시
     if (muscleData.isEmpty) {
       return Container(
         color: Colors.white,
@@ -521,53 +632,64 @@ class _ResultScreenState extends State<ResultScreen>
         itemCount: sorted.length,
         itemBuilder: (context, index) {
           final entry = sorted[index];
-          final muscleName = entry.key;
+          final muscleKey = entry.key;
           final score = entry.value;
-          final isHighlighted = _highlightedMuscle == muscleName;
 
           return Card(
-            margin: const EdgeInsets.only(bottom: 8.0),
-            elevation: isHighlighted ? 4 : 0,
+            margin: const EdgeInsets.only(bottom: 12.0),
+            elevation: 0,
             color: Colors.white,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: BorderSide(
-                color: isHighlighted ? Colors.blue : Colors.grey.shade200,
-                width: isHighlighted ? 2 : 1,
-              ),
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade200, width: 1),
             ),
-            child: ListTile(
-              leading: const Icon(Icons.fitness_center, size: 20),
-              title: Text(
-                _getMuscleDisplayName(muscleName),
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: isHighlighted ? Colors.blue : Colors.black87,
-                ),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.accessibility,
+                        size: 24,
+                        color: _getScoreColor(score),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          MuscleNameMapper.localize(muscleKey),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        SafeCalculations.formatPercentOrNA(score),
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: _getScoreColor(score),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: SafeCalculations.percentToProgress(score),
+                      backgroundColor: Colors.grey.shade200,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        _getScoreColor(score),
+                      ),
+                      minHeight: 8,
+                    ),
+                  ),
+                ],
               ),
-              trailing: Text(
-                SafeCalculations.formatPercentOrNA(score),
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: score > 0
-                      ? (isHighlighted ? Colors.blue : Colors.black87)
-                      : Colors.grey,
-                ),
-              ),
-              onTap: () {
-                setState(() {
-                  _highlightedMuscle = muscleName;
-                });
-                Future.delayed(const Duration(seconds: 2), () {
-                  if (mounted) {
-                    setState(() {
-                      _highlightedMuscle = null;
-                    });
-                  }
-                });
-              },
             ),
           );
         },
@@ -575,8 +697,78 @@ class _ResultScreenState extends State<ResultScreen>
     );
   }
 
-  /// 관절 모드 아코디언 리스트 (백엔드 데이터만 사용, Fallback 완전 제거)
-  Widget _buildJointAccordionList() {
+  /// 근육 점수 재계산 (1순위: calculateLayeredActivation 호출)
+  double? _recalculateMuscleScore(String muscleKey) {
+    if (_rawAnalysisData == null) {
+      return null;
+    }
+
+    try {
+      // rom_data에서 rom 추출 시도
+      final romData = _rawAnalysisData!['rom_data'] as Map<String, dynamic>?;
+      double? rom;
+      if (romData != null) {
+        // 관절 키를 근육 키로 매핑 시도 (예: 'knee' -> 'quadriceps')
+        final jointKey = _getJointKeyForMuscle(muscleKey);
+        if (jointKey != null) {
+          final romValue = romData[jointKey];
+          if (romValue != null && romValue is num) {
+            rom = romValue.toDouble();
+          }
+        }
+      }
+
+      // motion_data에서 deltaAngle 계산 시도
+      // (간단화: rom이 있으면 deltaAngle로 사용)
+      double? deltaAngle = rom;
+
+      // calculateLayeredActivation 호출
+      if (rom != null || deltaAngle != null) {
+        final recalculated = MuscleMetricUtils.calculateLayeredActivation(
+          muscleKey: muscleKey,
+          deltaAngle: deltaAngle,
+          rom: rom,
+          timeDelta: 0.033,
+        );
+        if (recalculated > 0 && !recalculated.isNaN) {
+          return recalculated;
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ [ResultScreen] 근육 점수 재계산 실패: $e');
+    }
+
+    return null;
+  }
+
+  /// 근육 키에 해당하는 관절 키 반환 (간단한 매핑)
+  String? _getJointKeyForMuscle(String muscleKey) {
+    final lowerKey = muscleKey.toLowerCase();
+    if (lowerKey.contains('quad') || lowerKey.contains('hamstring')) {
+      return 'knee';
+    } else if (lowerKey.contains('glute')) {
+      return 'hip';
+    } else if (lowerKey.contains('bicep') || lowerKey.contains('tricep')) {
+      return 'elbow';
+    } else if (lowerKey.contains('deltoid') || lowerKey.contains('pec')) {
+      return 'shoulder';
+    }
+    return null;
+  }
+
+  /// 점수에 따른 색상 반환 (80↑ 초록, 50↑ 노랑, 그 외 회색)
+  Color _getScoreColor(double score) {
+    if (score >= 80) {
+      return Colors.green.shade600;
+    } else if (score >= 50) {
+      return Colors.orange.shade600;
+    } else {
+      return Colors.grey.shade600;
+    }
+  }
+
+  /// 관절 탭 UI (ROM 시각화, 데이터 필터링)
+  Widget _buildJointTab() {
     if (_biomechanicsResult == null) {
       return Container(
         color: Colors.white,
@@ -595,11 +787,17 @@ class _ResultScreenState extends State<ResultScreen>
     if (_biomechanicsResult!.jointStats != null &&
         _biomechanicsResult!.jointStats!.isNotEmpty) {
       for (final entry in _biomechanicsResult!.jointStats!.entries) {
-        jointData[entry.key] = entry.value;
+        final jointStat = entry.value;
+        // 값이 0이거나 의미 없는 데이터는 필터링
+        if (jointStat.romDegrees > 0 ||
+            jointStat.contributionScore > 0 ||
+            jointStat.stabilityScore > 0) {
+          jointData[entry.key] = jointStat;
+        }
       }
     }
 
-    // jointData가 비어있으면 N/A 표시 (레거시 Fallback 없음)
+    // jointData가 비어있으면 N/A 표시
     if (jointData.isEmpty) {
       return Container(
         color: Colors.white,
@@ -629,198 +827,83 @@ class _ResultScreenState extends State<ResultScreen>
           final entry = sorted[index];
           final jointName = entry.key;
           final jointStat = entry.value;
-          final isHighlighted = _highlightedJoint == jointName;
-          final isExpanded = index == 0; // 첫 번째 항목만 확장
+          final romDegrees = jointStat.romDegrees;
+
+          // ROM을 0~180도 범위로 정규화하여 progress 값 계산
+          final romProgress = (romDegrees / 180.0).clamp(0.0, 1.0);
 
           return Card(
-            margin: const EdgeInsets.only(bottom: 8.0),
-            elevation: isHighlighted ? 4 : 0,
-            // 🔧 배경색 명시적으로 흰색 설정 (회색 배경 방지)
+            margin: const EdgeInsets.only(bottom: 12.0),
+            elevation: 0,
             color: Colors.white,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: BorderSide(
-                color: isHighlighted ? Colors.blue : Colors.grey.shade200,
-                width: isHighlighted ? 2 : 1,
-              ),
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.grey.shade200, width: 1),
             ),
-            child: ExpansionTile(
-              initiallyExpanded: isExpanded,
-              leading: const Icon(Icons.accessibility_new, size: 20),
-              title: Text(
-                _getJointDisplayName(jointName),
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: isHighlighted ? Colors.blue : Colors.black87,
-                ),
-              ),
-              trailing: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.end,
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    SafeCalculations.formatPercentOrNA(
-                      jointStat.contributionScore,
-                    ),
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: jointStat.contributionScore > 0
-                          ? (isHighlighted ? Colors.blue : Colors.black87)
-                          : Colors.grey,
-                    ),
-                  ),
-                  Text(
-                    'ROM: ${SafeCalculations.formatValueOrNA(jointStat.romDegrees)}°',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                  ),
-                ],
-              ),
-              onExpansionChanged: (expanded) {
-                if (expanded) {
-                  setState(() {
-                    _highlightedJoint = jointName;
-                  });
-                  Future.delayed(const Duration(seconds: 2), () {
-                    if (mounted) {
-                      setState(() {
-                        _highlightedJoint = null;
-                      });
-                    }
-                  });
-                }
-              },
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  Row(
                     children: [
-                      // Contribution % 막대
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            '부하 기여도',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
-                          ),
-                          Text(
-                            SafeCalculations.formatPercentOrNA(
-                              jointStat.contributionScore,
-                            ),
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: jointStat.contributionScore > 0
-                                  ? Colors.blue
-                                  : Colors.grey,
-                            ),
-                          ),
-                        ],
+                      Icon(
+                        Icons.accessibility_new,
+                        size: 24,
+                        color: Colors.blue.shade700,
                       ),
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: jointStat.contributionScore > 0
-                            ? LinearProgressIndicator(
-                                value: SafeCalculations.percentToProgress(
-                                  jointStat.contributionScore,
-                                ),
-                                backgroundColor: Colors.grey[200],
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  Colors.blue.shade400,
-                                ),
-                                minHeight: 8,
-                              )
-                            : Container(
-                                height: 8,
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: const Center(
-                                  child: Text(
-                                    'N/A',
-                                    style: TextStyle(
-                                      fontSize: 8,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                ),
-                              ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          MuscleNameMapper.getJointDisplayName(jointName),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
+                        ),
                       ),
-                      const SizedBox(height: 16),
-                      // ROM 정보
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            'ROM (도)',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
-                          ),
-                          Text(
-                            SafeCalculations.formatValueOrNA(
-                              jointStat.romDegrees,
-                            ),
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: jointStat.romDegrees > 0
-                                  ? Colors.orange
-                                  : Colors.grey,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      // 안정성 점수
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            '안정성 점수',
-                            style: TextStyle(fontSize: 12, color: Colors.grey),
-                          ),
-                          Text(
-                            SafeCalculations.formatPercentOrNA(
-                              jointStat.stabilityScore,
-                            ),
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
+                      Text(
+                        '${SafeCalculations.formatValueOrNA(romDegrees)}°',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: romDegrees > 0
+                              ? Colors.orange.shade700
+                              : Colors.grey,
+                        ),
                       ),
                     ],
                   ),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: romProgress,
+                      backgroundColor: Colors.grey.shade200,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Colors.orange.shade600,
+                      ),
+                      minHeight: 8,
+                    ),
+                  ),
+                  if (jointStat.contributionScore > 0) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '부하 기여도: ${SafeCalculations.formatPercentOrNA(jointStat.contributionScore)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           );
         },
       ),
     );
-  }
-
-  /// 관절 한글명 반환
-  String _getMuscleDisplayName(String muscleKey) {
-    return MuscleNameMapper.localize(muscleKey);
-  }
-
-  String _getJointDisplayName(String jointKey) {
-    const mapping = {
-      'neck': '목',
-      'spine': '척추',
-      'shoulder': '어깨',
-      'elbow': '팔꿈치',
-      'wrist': '손목',
-      'hip': '고관절',
-      'knee': '무릎',
-      'ankle': '발목',
-    };
-    return mapping[jointKey] ?? jointKey;
   }
 
   /// 결과 저장

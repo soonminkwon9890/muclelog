@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../utils/muscle_name_mapper.dart';
 
 /// 실사 해부도 기반 동적 히트맵 위젯
 /// ShaderMask를 활용하여 근육별 활성도를 시각화합니다.
@@ -123,40 +122,35 @@ class _SilhouettePainter extends CustomPainter {
 class _MuscleHeatmapWidgetState extends State<MuscleHeatmapWidget>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-  late Animation<double> _pulseAnimation;
-  late Animation<double> _flashAnimation;
+  // 마스크 이미지 제거로 인해 애니메이션 필드 제거
+  // late Animation<double> _pulseAnimation;
+  // late Animation<double> _flashAnimation;
 
   @override
   void initState() {
     super.initState();
 
     // Pulsing 애니메이션 (STATE_PULL, STATE_PUSH용)
+    // 마스크 이미지 제거로 인해 애니메이션 로직 단순화
     _pulseController = AnimationController(
       duration: const Duration(milliseconds: 500),
       vsync: this,
     );
 
-    _pulseAnimation = Tween<double>(begin: 0.7, end: 1.0).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
-
-    // Flash 애니메이션 (하이라이트용)
-    _flashAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
-    );
-
-    // 애니메이션 시작 조건 확인
-    if (widget.biomechPattern == 'STATE_PULL' ||
-        widget.biomechPattern == 'STATE_PUSH') {
-      _pulseController.repeat(reverse: true);
-    }
+    // 애니메이션 시작 조건 확인 (필요시 사용)
+    // 마스크 이미지 제거로 인해 애니메이션 효과는 비활성화
+    // if (widget.biomechPattern == 'STATE_PULL' ||
+    //     widget.biomechPattern == 'STATE_PUSH') {
+    //   _pulseController.repeat(reverse: true);
+    // }
 
     // 하이라이트가 있으면 한 번 깜빡임
-    if (widget.highlightedMuscle != null) {
-      _pulseController.forward().then((_) {
-        _pulseController.reverse();
-      });
-    }
+    // 마스크 이미지 제거로 인해 애니메이션 효과는 비활성화
+    // if (widget.highlightedMuscle != null) {
+    //   _pulseController.forward().then((_) {
+    //     _pulseController.reverse();
+    //   });
+    // }
   }
 
   @override
@@ -279,91 +273,6 @@ class _MuscleHeatmapWidgetState extends State<MuscleHeatmapWidget>
     }
   }
 
-  /// 마스크 레이어 빌드
-  Widget _buildMaskLayer(
-    String muscleKey,
-    double score,
-    int rank,
-    Map<String, int> ranks,
-  ) {
-    if (score <= 0) return const SizedBox.shrink();
-
-    final maskFileName = MuscleNameMapper.getMaskFileName(
-      muscleKey,
-      widget.isFront,
-    );
-
-    if (maskFileName == null) return const SizedBox.shrink();
-
-    final isHighlighted = widget.highlightedMuscle == muscleKey;
-    final color = _getColorForRank(rank, isHighlighted);
-
-    // 애니메이션 적용
-    Widget maskWidget = ShaderMask(
-      shaderCallback: (bounds) {
-        return LinearGradient(colors: [color, color]).createShader(bounds);
-      },
-      blendMode: BlendMode.srcATop,
-      child: Image.asset(
-        'assets/masks/$maskFileName',
-        fit: BoxFit.contain,
-        errorBuilder: (context, error, stackTrace) {
-          // 마스크 이미지가 없으면 표시하지 않음
-          return const SizedBox.shrink();
-        },
-      ),
-    );
-
-    // STATE_HINGE: Glow 효과
-    if (widget.biomechPattern == 'STATE_HINGE' && rank <= 2) {
-      maskWidget = ColorFiltered(
-        colorFilter: ColorFilter.mode(
-          color.withValues(alpha: 0.8),
-          BlendMode.colorBurn,
-        ),
-        child: maskWidget,
-      );
-    }
-
-    // STATE_PULL/PUSH: Pulsing 효과
-    if ((widget.biomechPattern == 'STATE_PULL' ||
-            widget.biomechPattern == 'STATE_PUSH') &&
-        rank <= 2) {
-      maskWidget = AnimatedBuilder(
-        animation: _pulseAnimation,
-        builder: (context, child) {
-          return Opacity(opacity: _pulseAnimation.value, child: maskWidget);
-        },
-      );
-    }
-
-    // 하이라이트 깜빡임
-    if (isHighlighted) {
-      maskWidget = AnimatedBuilder(
-        animation: _flashAnimation,
-        builder: (context, child) {
-          return Opacity(
-            opacity: _flashAnimation.value,
-            child: Container(
-              decoration: BoxDecoration(
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.white.withValues(alpha: 0.8),
-                    blurRadius: 20,
-                    spreadRadius: 5,
-                  ),
-                ],
-              ),
-              child: maskWidget,
-            ),
-          );
-        },
-      );
-    }
-
-    return Positioned.fill(child: maskWidget);
-  }
-
   /// 폴백 히트맵 빌드 (이미지 없을 때)
   Widget _buildFallbackHeatmap(Map<String, int> ranks) {
     return LayoutBuilder(
@@ -384,10 +293,27 @@ class _MuscleHeatmapWidgetState extends State<MuscleHeatmapWidget>
 
               if (score <= 0) return const SizedBox.shrink();
 
-              // 전면/후면 구분 확인
+              // 전면/후면 구분 확인 (키워드 기반으로 간단히 판단)
+              final lowerKey = muscleKey.toLowerCase();
               final shouldShow = widget.isFront
-                  ? MuscleNameMapper.isFrontMuscle(muscleKey)
-                  : MuscleNameMapper.isBackMuscle(muscleKey);
+                  ? (lowerKey.contains('pectoralis') ||
+                        lowerKey.contains('pec') ||
+                        lowerKey.contains('abs') ||
+                        lowerKey.contains('quads') ||
+                        lowerKey.contains('quad') ||
+                        lowerKey.contains('deltoid') ||
+                        lowerKey.contains('biceps') ||
+                        lowerKey.contains('triceps'))
+                  : (lowerKey.contains('lats') ||
+                        lowerKey.contains('lat') ||
+                        lowerKey.contains('trapezius') ||
+                        lowerKey.contains('traps') ||
+                        lowerKey.contains('erector') ||
+                        lowerKey.contains('spine') ||
+                        lowerKey.contains('glutes') ||
+                        lowerKey.contains('glute') ||
+                        lowerKey.contains('hamstrings') ||
+                        lowerKey.contains('hamstring'));
 
               if (!shouldShow) return const SizedBox.shrink();
 
@@ -462,22 +388,72 @@ class _MuscleHeatmapWidgetState extends State<MuscleHeatmapWidget>
                     ),
                   ),
                 ),
-                // Mask Layers: 각 근육별 마스크 레이어
+                // 히트맵 점 표시 (마스크 이미지 대신 사용)
                 ...widget.muscleData.entries.map((entry) {
                   final muscleKey = entry.key;
                   final score = entry.value;
                   final rank = ranks[muscleKey] ?? 3;
 
-                  // 전면/후면 구분 확인
+                  if (score <= 0) return const SizedBox.shrink();
+
+                  // 전면/후면 구분 확인 (키워드 기반으로 간단히 판단)
+                  final lowerKey = muscleKey.toLowerCase();
                   final shouldShow = widget.isFront
-                      ? MuscleNameMapper.isFrontMuscle(muscleKey)
-                      : MuscleNameMapper.isBackMuscle(muscleKey);
+                      ? (lowerKey.contains('pectoralis') ||
+                            lowerKey.contains('pec') ||
+                            lowerKey.contains('abs') ||
+                            lowerKey.contains('quads') ||
+                            lowerKey.contains('quad') ||
+                            lowerKey.contains('deltoid') ||
+                            lowerKey.contains('biceps') ||
+                            lowerKey.contains('triceps'))
+                      : (lowerKey.contains('lats') ||
+                            lowerKey.contains('lat') ||
+                            lowerKey.contains('trapezius') ||
+                            lowerKey.contains('traps') ||
+                            lowerKey.contains('erector') ||
+                            lowerKey.contains('spine') ||
+                            lowerKey.contains('glutes') ||
+                            lowerKey.contains('glute') ||
+                            lowerKey.contains('hamstrings') ||
+                            lowerKey.contains('hamstring'));
 
-                  if (!shouldShow || score <= 0) {
-                    return const SizedBox.shrink();
-                  }
+                  if (!shouldShow) return const SizedBox.shrink();
 
-                  return _buildMaskLayer(muscleKey, score, rank, ranks);
+                  // 폴백 히트맵 점 표시
+                  return LayoutBuilder(
+                    builder: (context, constraints) {
+                      final size = constraints.biggest;
+                      final position = _getMusclePosition(muscleKey, size);
+                      final color = _getColorForRank(rank, false);
+                      final isHighlighted =
+                          widget.highlightedMuscle == muscleKey;
+
+                      return Positioned(
+                        left: position.dx - 12,
+                        top: position.dy - 12,
+                        child: Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: isHighlighted ? Colors.white : color,
+                            border: Border.all(
+                              color: isHighlighted ? color : Colors.transparent,
+                              width: 3,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: color.withValues(alpha: 0.5),
+                                blurRadius: 8,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  );
                 }),
               ],
             ),
