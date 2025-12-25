@@ -8,8 +8,8 @@ import type {
 // Next.js가 이 라우트를 동적으로 처리하도록 강제 (빌드 타임 정적 생성 방지)
 export const dynamic = "force-dynamic";
 
-// Vercel 함수 실행 시간 제한 연장 (60초)
-export const maxDuration = 60;
+// Vercel 함수 실행 시간 제한 연장 (300초 = 5분, Pro 요금제)
+export const maxDuration = 300;
 
 /**
  * HTTP POST 엔드포인트: /api/analyze-workout
