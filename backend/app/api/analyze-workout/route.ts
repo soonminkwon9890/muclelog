@@ -8,6 +8,9 @@ import type {
 // Next.js가 이 라우트를 동적으로 처리하도록 강제 (빌드 타임 정적 생성 방지)
 export const dynamic = "force-dynamic";
 
+// Vercel 함수 실행 시간 제한 연장 (60초)
+export const maxDuration = 60;
+
 /**
  * HTTP POST 엔드포인트: /api/analyze-workout
  * Flutter 앱에서 Motion Data와 Context를 받아 Gemini 분석 수행
@@ -54,6 +57,21 @@ export async function POST(request: NextRequest) {
           }
           return frame;
         }
+      );
+    }
+
+    // 2.6. 데이터 다운샘플링 (5번째 프레임마다 선택)
+    if (body.motionData?.frames) {
+      const originalFrameCount = body.motionData.frames.length;
+      body.motionData.frames = body.motionData.frames.filter(
+        (_: any, index: number) => index % 5 === 0
+      );
+      const sampledFrameCount = body.motionData.frames.length;
+      console.log(
+        `📊 [Downsampling] 프레임 수 감소: ${originalFrameCount} → ${sampledFrameCount} (${(
+          (sampledFrameCount / originalFrameCount) *
+          100
+        ).toFixed(1)}%)`
       );
     }
 
