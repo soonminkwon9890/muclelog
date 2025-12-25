@@ -60,19 +60,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2.6. 데이터 다운샘플링 (5번째 프레임마다 선택)
+    // 2.6. 데이터 다운샘플링 (고정 개수 샘플링: 최대 50개)
     if (body.motionData?.frames) {
       const originalFrameCount = body.motionData.frames.length;
-      body.motionData.frames = body.motionData.frames.filter(
-        (_: any, index: number) => index % 5 === 0
-      );
-      const sampledFrameCount = body.motionData.frames.length;
-      console.log(
-        `📊 [Downsampling] 프레임 수 감소: ${originalFrameCount} → ${sampledFrameCount} (${(
-          (sampledFrameCount / originalFrameCount) *
-          100
-        ).toFixed(1)}%)`
-      );
+      const targetFrameCount = 50; // 고정 목표 프레임 수
+
+      if (originalFrameCount > targetFrameCount) {
+        // 샘플링 간격 계산: 전체 프레임을 50개로 나누기
+        const samplingRate = Math.ceil(originalFrameCount / targetFrameCount);
+
+        // 균일한 간격으로 프레임 추출
+        body.motionData.frames = body.motionData.frames.filter(
+          (_: any, index: number) => index % samplingRate === 0
+        );
+
+        // 최대 50개로 제한 (반올림으로 인해 초과할 수 있음)
+        if (body.motionData.frames.length > targetFrameCount) {
+          body.motionData.frames = body.motionData.frames.slice(
+            0,
+            targetFrameCount
+          );
+        }
+
+        const sampledFrameCount = body.motionData.frames.length;
+        console.log(
+          `📊 [Downsampling] 프레임 수 감소: ${originalFrameCount} → ${sampledFrameCount} (샘플링 간격: ${samplingRate}, ${(
+            (sampledFrameCount / originalFrameCount) *
+            100
+          ).toFixed(1)}%)`
+        );
+      } else {
+        console.log(
+          `📊 [Downsampling] 프레임 수가 ${targetFrameCount}개 이하이므로 샘플링 생략: ${originalFrameCount}개`
+        );
+      }
     }
 
     // 3. Server Action 호출
