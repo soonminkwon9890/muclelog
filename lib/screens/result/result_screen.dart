@@ -39,6 +39,10 @@ class _ResultScreenState extends State<ResultScreen>
   // 원본 분석 데이터 (rom_data, motion_data 접근용)
   Map<String, dynamic>? _rawAnalysisData;
 
+  // Context 정보 (운동 맥락)
+  String _targetBodyPart = 'WholeBody'; // 'UpperBody', 'LowerBody', 'WholeBody'
+  String _contractionType = 'Isotonic'; // 'Isotonic', 'Isometric', 'Isokinetic'
+
   // UI 상태
   int _currentMode = 0; // 0: 근육, 1: 관절
 
@@ -164,6 +168,9 @@ class _ResultScreenState extends State<ResultScreen>
       if (analysisData != null) {
         // 원본 데이터 저장 (rom_data, motion_data 접근용)
         _rawAnalysisData = analysisData;
+
+        // Context 정보 추출
+        _extractContextInfo(analysisData);
 
         // EnhancedAnalysisResult 형식으로 파싱
         try {
@@ -457,7 +464,89 @@ class _ResultScreenState extends State<ResultScreen>
     );
   }
 
-  /// 비교 분석 카드 (동적 랭킹 방식)
+  /// Context 정보 추출
+  void _extractContextInfo(Map<String, dynamic> analysisData) {
+    try {
+      final contextData = analysisData['context'] as Map<String, dynamic>?;
+      if (contextData != null) {
+        _targetBodyPart = contextData['bodyPart']?.toString() ?? 'WholeBody';
+        _contractionType = contextData['contraction']?.toString() ?? 'Isotonic';
+        debugPrint(
+          '✅ [ResultScreen] Context 정보 추출: bodyPart=$_targetBodyPart, contraction=$_contractionType',
+        );
+      } else {
+        // context가 없으면 기본값 유지
+        debugPrint('⚠️ [ResultScreen] context 정보 없음, 기본값 사용');
+      }
+    } catch (e) {
+      debugPrint('⚠️ [ResultScreen] Context 정보 추출 실패: $e');
+    }
+  }
+
+  /// 근육이 상체 근육인지 확인
+  bool _isUpperBodyMuscle(String muscleKey) {
+    final lowerKey = muscleKey.toLowerCase();
+    return lowerKey.contains('trapezius') ||
+        lowerKey.contains('traps') ||
+        lowerKey.contains('deltoid') ||
+        lowerKey.contains('lat') ||
+        lowerKey.contains('pectoralis') ||
+        lowerKey.contains('pec') ||
+        lowerKey.contains('biceps') ||
+        lowerKey.contains('triceps');
+  }
+
+  /// 근육이 하체 근육인지 확인
+  bool _isLowerBodyMuscle(String muscleKey) {
+    final lowerKey = muscleKey.toLowerCase();
+    return lowerKey.contains('glute') ||
+        lowerKey.contains('quad') ||
+        lowerKey.contains('hamstring') ||
+        lowerKey.contains('erector') ||
+        lowerKey.contains('spine') ||
+        lowerKey.contains('calf') ||
+        lowerKey.contains('thigh');
+  }
+
+  /// 지능형 필터링: 유효한 근육인지 확인
+  bool _isValidMuscle(String muscleKey, double score) {
+    // 1. 미세 노이즈 필터링 (0.1% 미만)
+    if (score < 0.1) {
+      return false;
+    }
+
+    // 2. Context 기반 필터링
+    if (_targetBodyPart == 'LowerBody') {
+      // 하체 운동인데 상체 근육이면 숨김
+      if (_isUpperBodyMuscle(muscleKey)) {
+        // 단, 점수가 비정상적으로 높으면(30% 이상) 오류 감지를 위해 표시
+        if (score >= 30.0) {
+          debugPrint(
+            '⚠️ [ResultScreen] 하체 운동 중 상체 근육($muscleKey) 높은 점수 감지: ${score.toStringAsFixed(1)}%',
+          );
+          return true; // 오류 감지를 위해 표시
+        }
+        return false; // 숨김
+      }
+    } else if (_targetBodyPart == 'UpperBody') {
+      // 상체 운동인데 하체 근육이면 숨김
+      if (_isLowerBodyMuscle(muscleKey)) {
+        // 단, 점수가 비정상적으로 높으면(30% 이상) 오류 감지를 위해 표시
+        if (score >= 30.0) {
+          debugPrint(
+            '⚠️ [ResultScreen] 상체 운동 중 하체 근육($muscleKey) 높은 점수 감지: ${score.toStringAsFixed(1)}%',
+          );
+          return true; // 오류 감지를 위해 표시
+        }
+        return false; // 숨김
+      }
+    }
+
+    // 3. 유효한 근육
+    return true;
+  }
+
+  /// 비교 분석 카드 (동적 랭킹 방식, 필터링된 데이터만 사용)
   Widget _buildComparisonCard() {
     if (_biomechanicsResult == null) {
       return const SizedBox.shrink();
@@ -465,17 +554,19 @@ class _ResultScreenState extends State<ResultScreen>
 
     final List<String> comparisonTexts = [];
 
-    // 근육 비교: 1위 vs 2위
-    if (_biomechanicsResult!.muscleScores != null &&
-        _biomechanicsResult!.muscleScores!.isNotEmpty) {
-      final sortedMuscles = _biomechanicsResult!.muscleScores!.entries.toList()
-        ..sort((a, b) => b.value.score.compareTo(a.value.score));
+    // 필터링된 근육 데이터 가져오기
+    final filteredMuscleData = _getFilteredMuscleData();
+
+    // 근육 비교: 1위 vs 2위 (필터링된 데이터만 사용)
+    if (filteredMuscleData.isNotEmpty) {
+      final sortedMuscles = filteredMuscleData.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
 
       if (sortedMuscles.length >= 2) {
         final first = sortedMuscles[0];
         final second = sortedMuscles[1];
-        final firstScore = first.value.score;
-        final secondScore = second.value.score;
+        final firstScore = first.value;
+        final secondScore = second.value;
 
         if (firstScore > 0 && secondScore > 0) {
           final diffPercent = ((firstScore - secondScore) / secondScore * 100)
@@ -564,21 +655,8 @@ class _ResultScreenState extends State<ResultScreen>
     );
   }
 
-  /// 근육 탭 UI (3단계 폴백 전략, Progress Bar, 색상 코딩)
-  Widget _buildMuscleTab() {
-    if (_biomechanicsResult == null) {
-      return Container(
-        color: Colors.white,
-        child: const Center(
-          child: Text(
-            'N/A',
-            style: TextStyle(fontSize: 16, color: Colors.grey),
-          ),
-        ),
-      );
-    }
-
-    // 백엔드의 muscle_scores만 사용 (Fallback 없음)
+  /// 필터링된 근육 데이터 가져오기
+  Map<String, double> _getFilteredMuscleData() {
     final muscleData = <String, double>{};
 
     if (_biomechanicsResult!.muscleScores != null &&
@@ -602,10 +680,33 @@ class _ResultScreenState extends State<ResultScreen>
 
         // 3순위: 포맷팅 (값이 없으면 "-" 표시하도록 필터링)
         if (finalScore > 0 && !finalScore.isNaN && !finalScore.isInfinite) {
-          muscleData[muscleKey] = finalScore;
+          // 지능형 필터링 적용
+          if (_isValidMuscle(muscleKey, finalScore)) {
+            muscleData[muscleKey] = finalScore;
+          }
         }
       }
     }
+
+    return muscleData;
+  }
+
+  /// 근육 탭 UI (3단계 폴백 전략, Progress Bar, 색상 코딩, 지능형 필터링)
+  Widget _buildMuscleTab() {
+    if (_biomechanicsResult == null) {
+      return Container(
+        color: Colors.white,
+        child: const Center(
+          child: Text(
+            'N/A',
+            style: TextStyle(fontSize: 16, color: Colors.grey),
+          ),
+        ),
+      );
+    }
+
+    // 필터링된 근육 데이터 가져오기
+    final muscleData = _getFilteredMuscleData();
 
     // muscleData가 비어있으면 N/A 표시
     if (muscleData.isEmpty) {
@@ -698,6 +799,7 @@ class _ResultScreenState extends State<ResultScreen>
   }
 
   /// 근육 점수 재계산 (1순위: calculateLayeredActivation 호출)
+  /// rom_data의 관절 각도를 사용하여 정밀하게 재계산
   double? _recalculateMuscleScore(String muscleKey) {
     if (_rawAnalysisData == null) {
       return null;
@@ -708,12 +810,26 @@ class _ResultScreenState extends State<ResultScreen>
       final romData = _rawAnalysisData!['rom_data'] as Map<String, dynamic>?;
       double? rom;
       if (romData != null) {
-        // 관절 키를 근육 키로 매핑 시도 (예: 'knee' -> 'quadriceps')
+        // 근육-관절 매핑 규칙 적용
         final jointKey = _getJointKeyForMuscle(muscleKey);
         if (jointKey != null) {
+          // rom_data에서 직접 관절 각도 가져오기
           final romValue = romData[jointKey];
-          if (romValue != null && romValue is num) {
-            rom = romValue.toDouble();
+          if (romValue != null) {
+            // romValue가 숫자일 수도 있고, 객체일 수도 있음
+            if (romValue is num) {
+              rom = romValue.toDouble();
+            } else if (romValue is Map<String, dynamic>) {
+              // 객체 형식인 경우 rom_degrees 또는 rom 필드 추출
+              final romDegrees =
+                  romValue['rom_degrees'] ??
+                  romValue['romDegrees'] ??
+                  romValue['rom'] ??
+                  romValue['angle'];
+              if (romDegrees != null && romDegrees is num) {
+                rom = romDegrees.toDouble();
+              }
+            }
           }
         }
       }
@@ -722,15 +838,29 @@ class _ResultScreenState extends State<ResultScreen>
       // (간단화: rom이 있으면 deltaAngle로 사용)
       double? deltaAngle = rom;
 
-      // calculateLayeredActivation 호출
+      // calculateLayeredActivation 호출 (motionType 파라미터 추가)
       if (rom != null || deltaAngle != null) {
+        // contractionType을 motionType으로 변환
+        String? motionType;
+        if (_contractionType == 'Isometric') {
+          motionType = 'isometric';
+        } else if (_contractionType == 'Isokinetic') {
+          motionType = 'isokinetic';
+        } else {
+          motionType = 'isotonic'; // 기본값
+        }
+
         final recalculated = MuscleMetricUtils.calculateLayeredActivation(
           muscleKey: muscleKey,
           deltaAngle: deltaAngle,
           rom: rom,
           timeDelta: 0.033,
+          motionType: motionType, // Context 기반 motionType 전달
         );
         if (recalculated > 0 && !recalculated.isNaN) {
+          debugPrint(
+            '✅ [ResultScreen] 근육 점수 재계산 성공: $muscleKey -> ${recalculated.toStringAsFixed(1)}% (motionType: $motionType)',
+          );
           return recalculated;
         }
       }
@@ -741,18 +871,25 @@ class _ResultScreenState extends State<ResultScreen>
     return null;
   }
 
-  /// 근육 키에 해당하는 관절 키 반환 (간단한 매핑)
+  /// 근육 키에 해당하는 관절 키 반환 (정밀한 매핑 규칙)
   String? _getJointKeyForMuscle(String muscleKey) {
     final lowerKey = muscleKey.toLowerCase();
+
+    // 하체 근육 -> 무릎/고관절
     if (lowerKey.contains('quad') || lowerKey.contains('hamstring')) {
       return 'knee';
     } else if (lowerKey.contains('glute')) {
       return 'hip';
-    } else if (lowerKey.contains('bicep') || lowerKey.contains('tricep')) {
+    }
+    // 상체 근육 -> 팔꿈치/어깨
+    else if (lowerKey.contains('bicep') || lowerKey.contains('tricep')) {
       return 'elbow';
-    } else if (lowerKey.contains('deltoid') || lowerKey.contains('pec')) {
+    } else if (lowerKey.contains('deltoid') ||
+        lowerKey.contains('pec') ||
+        lowerKey.contains('lat')) {
       return 'shoulder';
     }
+
     return null;
   }
 
