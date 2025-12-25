@@ -46,7 +46,7 @@ export async function analyzeWorkout(
   // 5. Gemini API 호출 (Lazy Initialization: 요청 시점에만 초기화)
   // 빌드 타임 초기화 방지를 위해 함수 내부에서만 인스턴스 생성
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
   let geminiResponse: AnalysisResult;
   let retryCount = 0;
