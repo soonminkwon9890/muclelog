@@ -4,11 +4,20 @@ import type { AnalysisResult } from "../types/biomechanics";
 /**
  * Supabase 클라이언트 초기화
  */
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+let supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl) {
   throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL environment variable");
+}
+
+// URL 정규화: 이미 https://로 시작하면 그대로 사용, 아니면 추가
+// 환경 변수에 이미 https://가 포함되어 있을 수 있으므로 중복 방지
+if (!supabaseUrl.startsWith("http://") && !supabaseUrl.startsWith("https://")) {
+  supabaseUrl = `https://${supabaseUrl}`;
+} else if (supabaseUrl.startsWith("https://https://")) {
+  // 중복된 https:// 제거
+  supabaseUrl = supabaseUrl.replace(/^https:\/\/https:\/\//, "https://");
 }
 
 if (!supabaseServiceKey) {
