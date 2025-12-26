@@ -100,8 +100,8 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
         final viewModel = _viewModel;
 
         if (viewModel.isLoading) {
-          return Scaffold(
-            appBar: AppBar(
+    return Scaffold(
+      appBar: AppBar(
               title: const Text('비교 분석'),
               backgroundColor: Colors.white,
               foregroundColor: Colors.black87,
@@ -120,7 +120,7 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
               elevation: 0,
             ),
             body: Center(
-              child: Padding(
+        child: Padding(
                 padding: const EdgeInsets.all(24.0),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -133,7 +133,7 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
                     const SizedBox(height: 16),
                     Text(
                       viewModel.errorMessage!,
-                      textAlign: TextAlign.center,
+            textAlign: TextAlign.center,
                       style: const TextStyle(
                         fontSize: 16,
                         color: Colors.black87,
@@ -146,10 +146,10 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
                     ),
                   ],
                 ),
-              ),
-            ),
-          );
-        }
+          ),
+        ),
+      );
+    }
 
         // 분석 중인 경우 스켈레톤 로더 표시
         if (viewModel.isAnalyzing) {
@@ -371,7 +371,7 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
             title: Text(MuscleNameMapper.localize(muscleName)),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: [
+        children: [
                 Text(
                   '${currentScore.toStringAsFixed(1)}%',
                   style: const TextStyle(fontWeight: FontWeight.bold),
@@ -451,23 +451,23 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
         final isExpanded = index == 0; // 첫 번째 항목만 확장
         final isHighlighted = _highlightedJoint == jointName;
 
-        return Card(
+    return Card(
           margin: const EdgeInsets.only(bottom: 8.0),
           color: isHighlighted ? Colors.blue.shade50 : Colors.white,
-          child: ExpansionTile(
+      child: ExpansionTile(
             initiallyExpanded: isExpanded,
             title: Text(MuscleNameMapper.getJointDisplayName(jointName)),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: [
+          children: [
                 Text(
                   '${currentStat.contributionScore.toStringAsFixed(1)}%',
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
                 if (previousStat != null)
-                  Text(
+                    Text(
                     '${(currentStat.contributionScore - previousStat.contributionScore).toStringAsFixed(1)}%',
-                    style: TextStyle(
+                      style: TextStyle(
                       color:
                           (currentStat.contributionScore -
                                   previousStat.contributionScore) >=
@@ -475,9 +475,9 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
                           ? Colors.green
                           : Colors.red,
                       fontSize: 12,
+                      ),
                     ),
-                  ),
-              ],
+                  ],
             ),
             onExpansionChanged: (expanded) {
               if (expanded) {
@@ -503,15 +503,15 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
                     Text(
                       '안정성: ${currentStat.stabilityScore.toStringAsFixed(1)}점',
                     ),
-                    Text(
+            Text(
                       '기여도: ${currentStat.contributionScore.toStringAsFixed(1)}%',
                     ),
                   ],
                 ),
-              ),
-            ],
           ),
-        );
+        ],
+      ),
+    );
       },
     );
   }

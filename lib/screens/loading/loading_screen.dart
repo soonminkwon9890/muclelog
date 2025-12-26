@@ -64,11 +64,11 @@ class _LoadingScreenState extends State<LoadingScreen> {
   /// 분석 상태 조회
   Future<String> _fetchAnalysisStatus() async {
     try {
-    final response = await SupabaseService.instance.client
+      final response = await SupabaseService.instance.client
           .from('workout_logs')
-        .select('status')
+          .select('status')
           .eq('id', widget.logId)
-        .single();
+          .single();
 
       final status = response['status']?.toString() ?? 'UNKNOWN';
       debugPrint('📊 분석 상태 조회: logId=${widget.logId}, status=$status');
@@ -110,7 +110,7 @@ class _LoadingScreenState extends State<LoadingScreen> {
             builder: (context) => ResultScreen(
               videoId: videoId,
               logId: widget.logId,
-              exerciseName: widget.exerciseName,
+              // exerciseName 파라미터 제거 - DB에서 자동으로 불러옴
             ),
           ),
         );

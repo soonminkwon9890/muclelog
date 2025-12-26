@@ -191,6 +191,7 @@ class VideoRepository {
             poses: poses,
             timestamps: timestamps,
             motionType: motionType,
+            targetArea: targetArea,
           );
           debugPrint(
             '✅ [VideoRepository] 근육 활성도 계산 완료: ${muscleUsage.length}개 근육',
@@ -364,11 +365,13 @@ class VideoRepository {
   }
 
   /// [motionType] 운동 방식 타입
+  /// [targetArea] 사용자 선택 부위 (UPPER, LOWER, FULL)
   /// 반환: 근육별 활성도 맵 (`Map<String, double>`)
   Future<Map<String, double>> _calculateMuscleUsageFromPoses({
     required List<Pose> poses,
     required List<int> timestamps,
     required MotionType motionType,
+    required String targetArea,
   }) async {
     if (poses.length < 2) {
       return {};
@@ -476,6 +479,7 @@ class VideoRepository {
         prevPose: prevPose,
         currPose: currPose,
         jointDeltas: jointDeltas,
+        targetArea: targetArea,
       );
 
       // 결과에서 detailed_muscle_usage 추출 (performPhysicsBasedAnalysis의 반환값)

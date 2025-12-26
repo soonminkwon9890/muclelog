@@ -13,13 +13,13 @@ import '../../utils/muscle_metric_utils.dart';
 class ResultScreen extends StatefulWidget {
   final String videoId; // videos.id (UUID String) - 필수
   final String? logId; // workout_logs.id (UUID String) - 하위 호환성 (선택)
-  final String? exerciseName; // 🔧 선택적으로 변경 (DB에서 불러옴)
+  // 🔧 exerciseName 파라미터 제거 - DB에서만 로드하여 일관성 보장
 
   const ResultScreen({
     super.key,
     required this.videoId,
     this.logId, // 선택적 파라미터로 변경
-    this.exerciseName, // 🔧 선택적으로 변경
+    // 🔧 exerciseName 파라미터 제거 - DB에서만 로드
   });
 
   @override
@@ -91,11 +91,22 @@ class _ResultScreenState extends State<ResultScreen>
 
   /// 분석 결과 로드
   /// Single Source of Truth: workout_logs.ai_analysis_result만 사용
+  /// 🔧 핵심 원칙: DB에서만 데이터를 로드하여 업로드 직후와 재접속 시 일관성 보장
   Future<void> _loadAnalysisResult() async {
+    // 🔧 로컬 상태 초기화 (이전 데이터 잔여 방지)
+    // 업로드 직후와 재접속 시 완전히 동일한 화면을 보장하기 위해 이전 상태를 초기화
+    _biomechanicsResult = null;
+    _rawAnalysisData = null;
+    _workoutLogResponse = null;
+    _exerciseNameFromDb = null;
+    _videoUrl = null;
+    _errorMessage = null;
+
     try {
       debugPrint(
         '🟢 [ResultScreen] 분석 결과 로드 시작: videoId=${widget.videoId}, logId=${widget.logId}',
       );
+      debugPrint('   🔧 로컬 상태 초기화 완료 - DB에서 최신 데이터를 강제로 로드합니다');
 
       // 🔧 UUID 선택 로직:
       // 1순위: logId가 null이 아니고 빈 문자열이 아닐 때 -> logId 사용
@@ -326,7 +337,7 @@ class _ResultScreenState extends State<ResultScreen>
     if (_biomechanicsResult == null) {
       return Scaffold(
         appBar: AppBar(
-          title: Text((_exerciseNameFromDb ?? widget.exerciseName ?? '운동 분석')),
+          title: Text(_exerciseNameFromDb ?? '운동 분석'),
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         ),
         body: Center(
@@ -375,7 +386,7 @@ class _ResultScreenState extends State<ResultScreen>
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text((_exerciseNameFromDb ?? widget.exerciseName ?? '운동 분석')),
+        title: Text(_exerciseNameFromDb ?? '운동 분석'),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,

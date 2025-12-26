@@ -664,7 +664,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         builder: (context) => ResultScreen(
                           videoId: videoId!,
                           logId: logId,
-                          exerciseName: exerciseName,
+                          // exerciseName 파라미터 제거 - DB에서 자동으로 불러옴
                         ),
                       ),
                     );
@@ -697,7 +697,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             builder: (context) => ResultScreen(
                               videoId: videoId!,
                               logId: logId,
-                              exerciseName: exerciseName,
+                              // exerciseName 파라미터 제거 - DB에서 자동으로 불러옴
                             ),
                           ),
                         );

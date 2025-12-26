@@ -36,53 +36,55 @@ class MuscleMetricUtils {
   /// 전신 관절 기여도 분석 (순수 움직임 총량 비교)
   /// [jointDeltas] 관절별 프레임 간 각도 변화량 절대값 맵
   /// 반환: {'ratios': Map, 'totalROM': double, 'regionDominance': String}
+  // [수정됨] 전신 관절 기여도 분석 (누적 이동량 기반)
   static Map<String, dynamic> analyzeGlobalJointContribution(
     Map<String, double> jointDeltas,
   ) {
-    // 1. 노이즈 필터링 (3도 미만 미세 떨림 무시)
-    final filteredDeltas = <String, double>{};
-    double totalROM = 0.0;
+    // jointDeltas는 이제 '프레임 간 변화량의 총합(Accumulated Delta)'이어야 함
+    // (만약 호출하는 쪽에서 단일 프레임 델타만 준다면, 이 로직은 호출부에서 누적해서 넘겨줘야 함.
+    // 여기서는 넘어온 값이 '누적값'이라고 가정하고 처리)
 
+    final filteredDeltas = <String, double>{};
+    double totalMovement = 0.0;
+
+    // 1. 노이즈 필터링 (Deadzone)
+    // 영상 전체에서 15도 미만으로 움직인 관절은 '고정된 상태'로 간주하여 0점 처리
     for (final entry in jointDeltas.entries) {
-      // 값이 3.0 이상일 때만 유의미한 움직임으로 간주
-      if (entry.value.abs() > 3.0) {
+      if (entry.value.abs() > 15.0) {
         filteredDeltas[entry.key] = entry.value.abs();
-        totalROM += entry.value.abs();
+        totalMovement += entry.value.abs();
       }
     }
 
-    if (totalROM == 0.0) {
+    if (totalMovement == 0.0) {
       return {'regionDominance': 'UNKNOWN', 'ratios': <String, double>{}};
     }
 
-    // 2. 부위별 누적 이동량 합산
+    // 2. 상/하체 총 움직임 비교
     double lowerSum =
         (filteredDeltas['hip'] ?? 0) +
         (filteredDeltas['knee'] ?? 0) +
         (filteredDeltas['ankle'] ?? 0);
     double upperSum =
-        (filteredDeltas['shoulder'] ?? 0) +
-        (filteredDeltas['elbow'] ?? 0) +
-        (filteredDeltas['wrist'] ?? 0);
+        (filteredDeltas['shoulder'] ?? 0) + (filteredDeltas['elbow'] ?? 0);
 
-    // 3. 지배적 부위 판별 (Pure Kinematics)
-    // 특정 운동을 가정하지 않고, 단순히 "어디가 더 많이 움직였나"를 20% 격차로 판단
+    // 3. 지배적 부위 판별 (확실한 차이 필요)
     String regionDominance = 'HYBRID';
-    if (lowerSum > upperSum * 1.2) {
+    if (lowerSum > upperSum * 1.5) {
+      // 1.5배 더 많이 움직여야 인정
       regionDominance = 'LOWER_BODY';
-    } else if (upperSum > lowerSum * 1.2) {
+    } else if (upperSum > lowerSum * 1.5) {
       regionDominance = 'UPPER_BODY';
     }
 
-    // 4. 기여도 비율 계산
     final ratios = <String, double>{};
     filteredDeltas.forEach((key, value) {
-      ratios[key] = value / totalROM;
+      ratios[key] = value / totalMovement;
     });
 
     return {
       'ratios': ratios,
-      'totalROM': totalROM,
+      'totalROM': totalMovement,
       'regionDominance': regionDominance,
     };
   }
@@ -608,93 +610,99 @@ class MuscleMetricUtils {
   // ============================================
 
   // ============================================
-  // [수정됨] 통합 분석 엔진 (참조 ROM 기반 점수화)
+  // [수정됨] 통합 분석 엔진 (사용자 선택 존중 + ROM 기반)
   // ============================================
-  /// 통합 물리 기반 분석 (참조 ROM 기반 점수화)
+  /// 통합 물리 기반 분석 (사용자 선택 존중 + ROM 기반)
   /// [prevPose] 이전 프레임 포즈
   /// [currPose] 현재 프레임 포즈
-  /// [jointDeltas] 관절별 각도 변화량 맵
+  /// [jointDeltas] 관절별 각도 변화량 맵 (누적 이동량)
+  /// [targetArea] 사용자 선택값 (UPPER, LOWER, FULL) - 기본값 'FULL'
   /// 반환: {'detailed_muscle_usage': Map, 'rom_data': Map, 'biomech_pattern': String}
   static Map<String, dynamic> performPhysicsBasedAnalysis({
     required dynamic prevPose,
     required dynamic currPose,
     required Map<String, double> jointDeltas,
+    String targetArea = 'FULL', // 사용자 선택값 (UPPER, LOWER, FULL)
   }) {
     final muscleUsage = <String, double>{};
 
-    // 1. 기여도 및 부위 판별
+    // 1. 기여도 및 부위 판별 (알고리즘 계산)
     final globalAnalysis = analyzeGlobalJointContribution(jointDeltas);
-    final regionDominance = globalAnalysis['regionDominance'] as String;
+    String calculatedDominance = globalAnalysis['regionDominance'] as String;
 
-    // 2. 관절별 움직임 데이터 추출 (절대값)
+    // 2. [핵심] 사용자 선택 우선 적용 (User Intent Filter)
+    String finalDominance = 'HYBRID';
+
+    // 대소문자 무시하고 비교
+    String target = targetArea.toUpperCase();
+
+    if (target == 'LOWER') {
+      finalDominance = 'LOWER_BODY'; // 하체 선택 시 무조건 하체 모드
+    } else if (target == 'UPPER') {
+      finalDominance = 'UPPER_BODY'; // 상체 선택 시 무조건 상체 모드
+    } else {
+      // 전신(FULL) 선택 시에만 알고리즘 계산 결과 따름
+      finalDominance = calculatedDominance;
+    }
+
+    // 3. 관절별 움직임 데이터 (Deadzone 15도 적용)
     double kneeROM = jointDeltas['knee']?.abs() ?? 0.0;
     double hipROM = jointDeltas['hip']?.abs() ?? 0.0;
-
     double shoulderROM = jointDeltas['shoulder']?.abs() ?? 0.0;
     double elbowROM = jointDeltas['elbow']?.abs() ?? 0.0;
 
-    // 3. 순수 역학 기반 점수 계산 (Raw Kinematic Score)
-    // 공식: (실제 움직인 각도 / 해당 관절의 기준 가동범위) * 100
-    // 기준 가동범위: 무릎(~130도), 고관절(~100도), 어깨(~120도), 팔꿈치(~140도)
-
-    // [하체 근육 매핑]
-    // 대퇴사두근: 무릎이 펴지거나 굽혀질 때 활성화
-    double quadScore = (kneeROM / 130.0 * 100.0).clamp(0.0, 100.0);
-    // 둔근: 고관절이 움직일 때 활성화
-    double gluteScore = (hipROM / 100.0 * 100.0).clamp(0.0, 100.0);
-    // 햄스트링: 고관절과 무릎이 동시에 관여 (보조)
-    double hamScore = ((hipROM * 0.6 + kneeROM * 0.4) / 110.0 * 100.0).clamp(
+    // 점수 계산 (Deadzone 15도 미만 0점)
+    double quadScore = kneeROM > 15
+        ? (kneeROM / 150.0 * 100).clamp(0.0, 100.0)
+        : 0.0;
+    double gluteScore = hipROM > 15
+        ? (hipROM / 120.0 * 100).clamp(0.0, 100.0)
+        : 0.0;
+    double hamScore = ((hipROM * 0.6 + kneeROM * 0.4) / 110.0 * 100).clamp(
       0.0,
       100.0,
     );
 
-    // [상체 근육 매핑]
-    // 삼각근/광배근: 어깨 관절 움직임 기반
-    double shoulderMuscleScore = (shoulderROM / 120.0 * 100.0).clamp(
-      0.0,
-      100.0,
-    );
-    // 이두/삼두: 팔꿈치 관절 움직임 기반
-    double armMuscleScore = (elbowROM / 140.0 * 100.0).clamp(0.0, 100.0);
+    double latsScore = shoulderROM > 15
+        ? (shoulderROM / 120.0 * 100).clamp(0.0, 100.0)
+        : 0.0;
+    double armScore = elbowROM > 15
+        ? (elbowROM / 150.0 * 100).clamp(0.0, 100.0)
+        : 0.0;
 
-    // 4. 부위별 가중치 적용 (Isolation Logic)
-    // 많이 움직인 부위는 점수 유지/증폭, 적게 움직인 부위는 노이즈로 간주하여 억제
-    if (regionDominance == 'LOWER_BODY') {
-      // 하체 집중: 상체 근육 점수를 30%로 억제, 하체 근육 1.5배 증폭
-      muscleUsage['quadriceps'] = (quadScore * 1.5).clamp(0.0, 100.0);
-      muscleUsage['glutes'] = (gluteScore * 1.5).clamp(0.0, 100.0);
+    // 4. 결정된 Dominance에 따라 가중치/억제 적용
+    if (finalDominance == 'LOWER_BODY') {
+      // 하체 집중: 상체 근육 점수를 10%로 강력 억제
+      muscleUsage['quadriceps'] = (quadScore * 1.2).clamp(0.0, 100.0);
+      muscleUsage['glutes'] = (gluteScore * 1.2).clamp(0.0, 100.0);
       muscleUsage['hamstrings'] = hamScore;
 
-      muscleUsage['latissimus_dorsi'] = shoulderMuscleScore * 0.3;
-      muscleUsage['deltoid'] = shoulderMuscleScore * 0.3;
-      muscleUsage['biceps'] = armMuscleScore * 0.3;
-      muscleUsage['triceps'] = armMuscleScore * 0.3;
-    } else if (regionDominance == 'UPPER_BODY') {
-      // 상체 집중: 하체 근육 점수를 30%로 억제, 상체 근육 1.1-1.5배 증폭
-      muscleUsage['latissimus_dorsi'] = (shoulderMuscleScore * 1.1).clamp(
-        0.0,
-        100.0,
-      );
-      muscleUsage['deltoid'] = (shoulderMuscleScore * 1.5).clamp(0.0, 100.0);
-      muscleUsage['biceps'] = (armMuscleScore * 1.5).clamp(0.0, 100.0);
-      muscleUsage['triceps'] = (armMuscleScore * 1.5).clamp(0.0, 100.0);
+      muscleUsage['latissimus_dorsi'] = latsScore * 0.1;
+      muscleUsage['deltoids'] = latsScore * 0.1;
+      muscleUsage['biceps'] = armScore * 0.1;
+      muscleUsage['triceps'] = armScore * 0.1;
+    } else if (finalDominance == 'UPPER_BODY') {
+      // 상체 집중: 하체 근육 점수를 10%로 강력 억제
+      muscleUsage['latissimus_dorsi'] = (latsScore * 1.2).clamp(0.0, 100.0);
+      muscleUsage['deltoids'] = (latsScore * 1.2).clamp(0.0, 100.0);
+      muscleUsage['biceps'] = (armScore * 1.2).clamp(0.0, 100.0);
+      muscleUsage['triceps'] = (armScore * 1.2).clamp(0.0, 100.0);
 
-      muscleUsage['quadriceps'] = quadScore * 0.3;
-      muscleUsage['glutes'] = gluteScore * 0.3;
-      muscleUsage['hamstrings'] = hamScore * 0.3;
+      muscleUsage['quadriceps'] = quadScore * 0.1;
+      muscleUsage['glutes'] = gluteScore * 0.1;
+      muscleUsage['hamstrings'] = hamScore * 0.1;
     } else {
-      // 전신 운동 (Hybrid): 억제 없이 그대로 반영
+      // 전신(Hybrid): 있는 그대로 반영
       muscleUsage['quadriceps'] = quadScore;
       muscleUsage['glutes'] = gluteScore;
       muscleUsage['hamstrings'] = hamScore;
-      muscleUsage['latissimus_dorsi'] = shoulderMuscleScore;
-      muscleUsage['deltoid'] = shoulderMuscleScore;
-      muscleUsage['biceps'] = armMuscleScore;
-      muscleUsage['triceps'] = armMuscleScore;
+      muscleUsage['latissimus_dorsi'] = latsScore;
+      muscleUsage['deltoids'] = latsScore;
+      muscleUsage['biceps'] = armScore;
+      muscleUsage['triceps'] = armScore;
     }
 
-    // 5. 결과 정렬 (점수 높은 순서대로 내림차순)
-    // 의미 없는(0점에 가까운) 근육은 하단으로 밀려남
+    // 5. 결과 정렬
     var sortedEntries = muscleUsage.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
@@ -702,7 +710,7 @@ class MuscleMetricUtils {
 
     return {
       'detailed_muscle_usage': sanitizeOutputMap(sortedMuscleUsage),
-      'biomech_pattern': regionDominance,
+      'biomech_pattern': finalDominance,
       'rom_data': sanitizeOutputMap(jointDeltas),
     };
   }
