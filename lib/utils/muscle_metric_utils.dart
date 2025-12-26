@@ -4,27 +4,6 @@ import '../models/analysis_log.dart';
 /// 물리 기반 생체역학 엔진 (Physics-First Biomechanics Engine)
 /// 운동 종목 이름을 사용하지 않고, 오직 비율, 변화량, 벡터 내적만으로 분석
 class MuscleMetricUtils {
-  /// 관절명 정규화 (대소문자 통일)
-  static String _normalizeJointName(String joint) {
-    return joint.toLowerCase();
-  }
-
-  /// 관절명을 한글명으로 변환
-  static String getJointDisplayName(String jointName) {
-    const mapping = {
-      'neck': '목',
-      'spine': '척추',
-      'shoulder': '어깨',
-      'elbow': '팔꿈치',
-      'wrist': '손목',
-      'hip': '고관절',
-      'knee': '무릎',
-      'ankle': '발목',
-    };
-
-    return mapping[_normalizeJointName(jointName)] ?? jointName;
-  }
-
   /// 데이터 출력 보정 (NaN 방지 및 소수점 정확도)
   /// [value] 원본 값
   /// 반환: 보정된 값 (소수점 1자리)
@@ -51,93 +30,60 @@ class MuscleMetricUtils {
   // Module 1: 전신 관절 기여도 분석 (Global Kinematics)
   // ============================================
 
-  /// 전신 관절 기여도 분석 (저프레임 보정: 누적 이동량 기반)
+  // ============================================
+  // [수정됨] 전신 관절 기여도 분석 (순수 움직임 총량 비교)
+  // ============================================
+  /// 전신 관절 기여도 분석 (순수 움직임 총량 비교)
   /// [jointDeltas] 관절별 프레임 간 각도 변화량 절대값 맵
-  /// 반환: {'ratios': Map, 'totalROM': double, 'regionDominance': String, 'lowerShare': double, 'upperShare': double}
-  ///
-  /// 🔧 수정: 프레임 간 delta만 보지 말고 누적 이동량을 기준으로 계산
-  /// 작은 떨림(Noise)은 무시하고 큰 움직임(Major Movement)에 가중치 부여
+  /// 반환: {'ratios': Map, 'totalROM': double, 'regionDominance': String}
   static Map<String, dynamic> analyzeGlobalJointContribution(
     Map<String, double> jointDeltas,
   ) {
-    // 🔧 1. 노이즈 필터링: 작은 떨림(2도 미만)은 무시
+    // 1. 노이즈 필터링 (3도 미만 미세 떨림 무시)
     final filteredDeltas = <String, double>{};
+    double totalROM = 0.0;
+
     for (final entry in jointDeltas.entries) {
-      final delta = entry.value.abs();
-      // 큰 움직임만 유지 (2도 이상)
-      if (delta >= 2.0) {
-        filteredDeltas[entry.key] = delta;
-      } else {
-        // 작은 떨림은 0으로 처리
-        filteredDeltas[entry.key] = 0.0;
+      // 값이 3.0 이상일 때만 유의미한 움직임으로 간주
+      if (entry.value.abs() > 3.0) {
+        filteredDeltas[entry.key] = entry.value.abs();
+        totalROM += entry.value.abs();
       }
     }
 
-    // 🔧 2. 누적 이동량 계산 (Total Accumulated Change)
-    // 프레임이 적어도 실제로 많이 움직인 관절이 높은 점수를 받도록
-    final totalROM = filteredDeltas.values.fold<double>(
-      0.0,
-      (sum, delta) => sum + delta,
-    );
-
     if (totalROM == 0.0) {
-      return {
-        'ratios': <String, double>{},
-        'totalROM': 0.0,
-        'regionDominance': 'UNKNOWN',
-        'lowerShare': 0.0,
-        'upperShare': 0.0,
-      };
+      return {'regionDominance': 'UNKNOWN', 'ratios': <String, double>{}};
     }
 
-    // 🔧 3. Contribution Ratio 계산 (누적 이동량 기반)
-    final ratios = <String, double>{};
-    for (final entry in filteredDeltas.entries) {
-      final ratio = entry.value / totalROM;
-      ratios[entry.key] = ratio;
-    }
+    // 2. 부위별 누적 이동량 합산
+    double lowerSum =
+        (filteredDeltas['hip'] ?? 0) +
+        (filteredDeltas['knee'] ?? 0) +
+        (filteredDeltas['ankle'] ?? 0);
+    double upperSum =
+        (filteredDeltas['shoulder'] ?? 0) +
+        (filteredDeltas['elbow'] ?? 0) +
+        (filteredDeltas['wrist'] ?? 0);
 
-    // 🔧 4. Region Dominance 판별 (절대평가: 누적 이동량 합 비교)
-    // Threshold 0.6 제거, 단순히 더 많이 움직인 쪽을 선택
-    final lowerBodyJoints = ['hip', 'knee', 'ankle'];
-    final upperBodyJoints = ['shoulder', 'elbow', 'wrist'];
-
-    // 🔧 누적 이동량 합 계산 (비율이 아닌 절대값)
-    double lowerTotalMovement = 0.0;
-    double upperTotalMovement = 0.0;
-
-    for (final joint in lowerBodyJoints) {
-      lowerTotalMovement += filteredDeltas[joint] ?? 0.0;
-    }
-    for (final joint in upperBodyJoints) {
-      upperTotalMovement += filteredDeltas[joint] ?? 0.0;
-    }
-
-    // 🔧 절대평가: 더 많이 움직인 쪽을 regionDominance로 결정
+    // 3. 지배적 부위 판별 (Pure Kinematics)
+    // 특정 운동을 가정하지 않고, 단순히 "어디가 더 많이 움직였나"를 20% 격차로 판단
     String regionDominance = 'HYBRID';
-    if (lowerTotalMovement > upperTotalMovement && lowerTotalMovement > 0.0) {
+    if (lowerSum > upperSum * 1.2) {
       regionDominance = 'LOWER_BODY';
-    } else if (upperTotalMovement > lowerTotalMovement &&
-        upperTotalMovement > 0.0) {
+    } else if (upperSum > lowerSum * 1.2) {
       regionDominance = 'UPPER_BODY';
     }
 
-    // Share 계산 (비율, 하위 호환성)
-    double lowerShare = 0.0;
-    double upperShare = 0.0;
-    for (final joint in lowerBodyJoints) {
-      lowerShare += ratios[joint] ?? 0.0;
-    }
-    for (final joint in upperBodyJoints) {
-      upperShare += ratios[joint] ?? 0.0;
-    }
+    // 4. 기여도 비율 계산
+    final ratios = <String, double>{};
+    filteredDeltas.forEach((key, value) {
+      ratios[key] = value / totalROM;
+    });
 
     return {
       'ratios': ratios,
       'totalROM': totalROM,
       'regionDominance': regionDominance,
-      'lowerShare': lowerShare,
-      'upperShare': upperShare,
     };
   }
 
@@ -661,7 +607,10 @@ class MuscleMetricUtils {
   // 통합 분석 엔진 (Integrated Analysis Engine)
   // ============================================
 
-  /// 통합 물리 기반 분석
+  // ============================================
+  // [수정됨] 통합 분석 엔진 (참조 ROM 기반 점수화)
+  // ============================================
+  /// 통합 물리 기반 분석 (참조 ROM 기반 점수화)
   /// [prevPose] 이전 프레임 포즈
   /// [currPose] 현재 프레임 포즈
   /// [jointDeltas] 관절별 각도 변화량 맵
@@ -672,261 +621,89 @@ class MuscleMetricUtils {
     required Map<String, double> jointDeltas,
   }) {
     final muscleUsage = <String, double>{};
-    final romData = <String, double>{};
 
-    // Step 1: 전신 관절 기여도 분석
+    // 1. 기여도 및 부위 판별
     final globalAnalysis = analyzeGlobalJointContribution(jointDeltas);
-    final ratios = Map<String, double>.from(globalAnalysis['ratios'] as Map);
-    final regionDominance = (globalAnalysis['regionDominance'] ?? '')
-        .toString();
+    final regionDominance = globalAnalysis['regionDominance'] as String;
 
-    // Step 2: Region별 분석
-    if (regionDominance == 'UPPER_BODY') {
-      // 상체 분석
-      try {
-        final shoulder =
-            currPose.landmarks['leftShoulder'] ??
-            currPose.landmarks['rightShoulder'];
-        final elbow =
-            currPose.landmarks['leftElbow'] ?? currPose.landmarks['rightElbow'];
-        final wrist =
-            currPose.landmarks['leftWrist'] ?? currPose.landmarks['rightWrist'];
-        final hip =
-            currPose.landmarks['leftHip'] ?? currPose.landmarks['rightHip'];
+    // 2. 관절별 움직임 데이터 추출 (절대값)
+    double kneeROM = jointDeltas['knee']?.abs() ?? 0.0;
+    double hipROM = jointDeltas['hip']?.abs() ?? 0.0;
 
-        if (shoulder != null && elbow != null && wrist != null && hip != null) {
-          // 상완골 리듬 평가
-          final rhythmAnalysis = evaluateScapulohumeralRhythm(
-            prevPose: prevPose,
-            currPose: currPose,
-          );
+    double shoulderROM = jointDeltas['shoulder']?.abs() ?? 0.0;
+    double elbowROM = jointDeltas['elbow']?.abs() ?? 0.0;
 
-          final penalty = rhythmAnalysis['penalty'] as double;
-          final trapeziusScore = rhythmAnalysis['trapeziusScore'] as double;
+    // 3. 순수 역학 기반 점수 계산 (Raw Kinematic Score)
+    // 공식: (실제 움직인 각도 / 해당 관절의 기준 가동범위) * 100
+    // 기준 가동범위: 무릎(~130도), 고관절(~100도), 어깨(~120도), 팔꿈치(~140도)
 
-          // 벡터 패턴 분석
-          final shoulderPoint = <String, double>{
-            'x': shoulder.x,
-            'y': shoulder.y,
-            'z': shoulder.z,
-          };
-          final elbowPoint = <String, double>{
-            'x': elbow.x,
-            'y': elbow.y,
-            'z': elbow.z,
-          };
-          final wristPoint = <String, double>{
-            'x': wrist.x,
-            'y': wrist.y,
-            'z': wrist.z,
-          };
-          final hipPoint = <String, double>{'x': hip.x, 'y': hip.y, 'z': hip.z};
+    // [하체 근육 매핑]
+    // 대퇴사두근: 무릎이 펴지거나 굽혀질 때 활성화
+    double quadScore = (kneeROM / 130.0 * 100.0).clamp(0.0, 100.0);
+    // 둔근: 고관절이 움직일 때 활성화
+    double gluteScore = (hipROM / 100.0 * 100.0).clamp(0.0, 100.0);
+    // 햄스트링: 고관절과 무릎이 동시에 관여 (보조)
+    double hamScore = ((hipROM * 0.6 + kneeROM * 0.4) / 110.0 * 100.0).clamp(
+      0.0,
+      100.0,
+    );
 
-          final vectorAnalysis = analyzeUpperBodyVectorPattern(
-            shoulderPoint: shoulderPoint,
-            elbowPoint: elbowPoint,
-            wristPoint: wristPoint,
-            hipPoint: hipPoint,
-          );
+    // [상체 근육 매핑]
+    // 삼각근/광배근: 어깨 관절 움직임 기반
+    double shoulderMuscleScore = (shoulderROM / 120.0 * 100.0).clamp(
+      0.0,
+      100.0,
+    );
+    // 이두/삼두: 팔꿈치 관절 움직임 기반
+    double armMuscleScore = (elbowROM / 140.0 * 100.0).clamp(0.0, 100.0);
 
-          final pattern = (vectorAnalysis['pattern'] ?? '').toString();
-          final pectoralis =
-              vectorAnalysis['pectoralis'] as Map<String, double>;
-          final lats = vectorAnalysis['lats'] as Map<String, double>;
+    // 4. 부위별 가중치 적용 (Isolation Logic)
+    // 많이 움직인 부위는 점수 유지/증폭, 적게 움직인 부위는 노이즈로 간주하여 억제
+    if (regionDominance == 'LOWER_BODY') {
+      // 하체 집중: 상체 근육 점수를 30%로 억제, 하체 근육 1.5배 증폭
+      muscleUsage['quadriceps'] = (quadScore * 1.5).clamp(0.0, 100.0);
+      muscleUsage['glutes'] = (gluteScore * 1.5).clamp(0.0, 100.0);
+      muscleUsage['hamstrings'] = hamScore;
 
-          // Protraction Failure 체크
-          if ((rhythmAnalysis['protractionFailure'] as bool) &&
-              pattern == 'PULL') {
-            // 광배근 점수 0점 처리
-            muscleUsage['lats'] = 0.0;
-          } else {
-            // 정상 점수 적용
-            muscleUsage['lats'] = math.max(
-              (lats['dynamicPull']! * penalty).clamp(0.0, 100.0),
-              (lats['staticTension']! * penalty).clamp(0.0, 100.0),
-            );
-          }
-
-          // 대흉근 점수
-          muscleUsage['pectoralis_upper'] = (pectoralis['upper']! * penalty)
-              .clamp(0.0, 100.0);
-          muscleUsage['pectoralis_sternal'] = (pectoralis['sternal']! * penalty)
-              .clamp(0.0, 100.0);
-          muscleUsage['pectoralis_costal'] = (pectoralis['costal']! * penalty)
-              .clamp(0.0, 100.0);
-
-          // 삼각근, 삼두근, 이두근
-          muscleUsage['anterior_deltoid'] =
-              (vectorAnalysis['deltoid'] as double) * penalty;
-          muscleUsage['triceps'] =
-              (vectorAnalysis['triceps'] as double) * penalty;
-          muscleUsage['biceps'] =
-              (vectorAnalysis['biceps'] as double) * penalty;
-
-          // 승모근
-          muscleUsage['trapezius'] = trapeziusScore;
-        }
-      } catch (e) {
-        // 에러 처리
-      }
-    } else if (regionDominance == 'LOWER_BODY') {
-      // 하체 분석
-      try {
-        final lowerBodyAnalysis = analyzeLowerBodyMechanics(
-          prevPose: prevPose,
-          currPose: currPose,
-          jointRatios: ratios,
-        );
-
-        muscleUsage['quads'] = lowerBodyAnalysis['quadScore'] as double;
-        muscleUsage['glutes'] = lowerBodyAnalysis['gluteScore'] as double;
-        muscleUsage['hamstrings'] =
-            lowerBodyAnalysis['hamstringScore'] as double;
-      } catch (e) {
-        // 에러 처리
-      }
-    }
-
-    // Step 3: 척추 안전성 체크 (Veto Power)
-    try {
-      final shoulder =
-          currPose.landmarks['leftShoulder'] ??
-          currPose.landmarks['rightShoulder'];
-      final hip =
-          currPose.landmarks['leftHip'] ?? currPose.landmarks['rightHip'];
-      final knee =
-          currPose.landmarks['leftKnee'] ?? currPose.landmarks['rightKnee'];
-
-      if (shoulder != null && hip != null && knee != null) {
-        final shoulderPoint = <String, double>{
-          'x': shoulder.x,
-          'y': shoulder.y,
-          'z': shoulder.z,
-        };
-        final hipPoint = <String, double>{'x': hip.x, 'y': hip.y, 'z': hip.z};
-        final kneePoint = <String, double>{
-          'x': knee.x,
-          'y': knee.y,
-          'z': knee.z,
-        };
-
-        final spinalSafety = evaluateSpinalSafety(
-          shoulderPoint: shoulderPoint,
-          hipPoint: hipPoint,
-          kneePoint: kneePoint,
-        );
-
-        // Veto: Flexion 감지 시 등 근육 점수 무효화
-        if (spinalSafety['veto'] as bool) {
-          muscleUsage['erector_spinae'] = 0.0;
-          muscleUsage['erector_spinae_bad'] =
-              (spinalSafety['riskLevel'] as double) * 100.0;
-          // 등 근육 점수도 무효화
-          muscleUsage['lats'] = 0.0;
-          muscleUsage['rhomboids'] = 0.0;
-        } else {
-          muscleUsage['erector_spinae'] =
-              spinalSafety['erectorScore'] as double;
-          muscleUsage['erector_spinae_bad'] = 0.0;
-        }
-      }
-    } catch (e) {
-      // 에러 처리
-    }
-
-    // Step 4: 동적 관절 가중치 적용 (ROM Data)
-    for (final entry in jointDeltas.entries) {
-      final jointRatio = ratios[entry.key] ?? 0.0;
-      final rawROM = entry.value.abs();
-
-      final weightedScore = calculateDynamicJointScore(
-        jointKey: entry.key,
-        rawAngle: rawROM,
-        jointContributionRatio: jointRatio,
+      muscleUsage['latissimus_dorsi'] = shoulderMuscleScore * 0.3;
+      muscleUsage['deltoid'] = shoulderMuscleScore * 0.3;
+      muscleUsage['biceps'] = armMuscleScore * 0.3;
+      muscleUsage['triceps'] = armMuscleScore * 0.3;
+    } else if (regionDominance == 'UPPER_BODY') {
+      // 상체 집중: 하체 근육 점수를 30%로 억제, 상체 근육 1.1-1.5배 증폭
+      muscleUsage['latissimus_dorsi'] = (shoulderMuscleScore * 1.1).clamp(
+        0.0,
+        100.0,
       );
+      muscleUsage['deltoid'] = (shoulderMuscleScore * 1.5).clamp(0.0, 100.0);
+      muscleUsage['biceps'] = (armMuscleScore * 1.5).clamp(0.0, 100.0);
+      muscleUsage['triceps'] = (armMuscleScore * 1.5).clamp(0.0, 100.0);
 
-      romData[entry.key] = weightedScore;
+      muscleUsage['quadriceps'] = quadScore * 0.3;
+      muscleUsage['glutes'] = gluteScore * 0.3;
+      muscleUsage['hamstrings'] = hamScore * 0.3;
+    } else {
+      // 전신 운동 (Hybrid): 억제 없이 그대로 반영
+      muscleUsage['quadriceps'] = quadScore;
+      muscleUsage['glutes'] = gluteScore;
+      muscleUsage['hamstrings'] = hamScore;
+      muscleUsage['latissimus_dorsi'] = shoulderMuscleScore;
+      muscleUsage['deltoid'] = shoulderMuscleScore;
+      muscleUsage['biceps'] = armMuscleScore;
+      muscleUsage['triceps'] = armMuscleScore;
     }
 
-    // Step 5: Biomech Pattern 추론 (물리 기반)
-    String biomechPattern = 'UNKNOWN';
-    if (regionDominance == 'UPPER_BODY') {
-      // 상체 패턴은 벡터 분석에서 결정
-      try {
-        final shoulder =
-            currPose.landmarks['leftShoulder'] ??
-            currPose.landmarks['rightShoulder'];
-        final elbow =
-            currPose.landmarks['leftElbow'] ?? currPose.landmarks['rightElbow'];
-        final wrist =
-            currPose.landmarks['leftWrist'] ?? currPose.landmarks['rightWrist'];
-        final hip =
-            currPose.landmarks['leftHip'] ?? currPose.landmarks['rightHip'];
+    // 5. 결과 정렬 (점수 높은 순서대로 내림차순)
+    // 의미 없는(0점에 가까운) 근육은 하단으로 밀려남
+    var sortedEntries = muscleUsage.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
 
-        if (shoulder != null && elbow != null && wrist != null && hip != null) {
-          final shoulderPoint = <String, double>{
-            'x': shoulder.x,
-            'y': shoulder.y,
-            'z': shoulder.z,
-          };
-          final elbowPoint = <String, double>{
-            'x': elbow.x,
-            'y': elbow.y,
-            'z': elbow.z,
-          };
-          final wristPoint = <String, double>{
-            'x': wrist.x,
-            'y': wrist.y,
-            'z': wrist.z,
-          };
-          final hipPoint = <String, double>{'x': hip.x, 'y': hip.y, 'z': hip.z};
-
-          final vectorAnalysis = analyzeUpperBodyVectorPattern(
-            shoulderPoint: shoulderPoint,
-            elbowPoint: elbowPoint,
-            wristPoint: wristPoint,
-            hipPoint: hipPoint,
-          );
-
-          final pattern = (vectorAnalysis['pattern'] ?? '').toString();
-          if (pattern == 'PUSH') {
-            biomechPattern = 'UPPER_PUSH';
-          } else if (pattern == 'PULL') {
-            biomechPattern = 'UPPER_PULL';
-          }
-        }
-      } catch (e) {
-        // 에러 처리
-      }
-    } else if (regionDominance == 'LOWER_BODY') {
-      // 하체 패턴은 비율 기반
-      final kneeRatio = ratios['knee'] ?? 0.0;
-      final hipRatio = ratios['hip'] ?? 0.0;
-
-      if (hipRatio > 0) {
-        final jointRatio = kneeRatio / hipRatio;
-        if (jointRatio > 1.2) {
-          biomechPattern = 'LOWER_KNEE_DOMINANT';
-        } else if (jointRatio < 0.8) {
-          biomechPattern = 'LOWER_HIP_DOMINANT';
-        }
-      }
-    }
-
-    // 🔧 Step 6: 결과 정렬 (활성도 점수 높은 순서대로 내림차순)
-    // UI에서 entries.toList()만 해도 가장 많이 쓴 근육이 맨 위에 뜨도록
-    final sortedMuscleUsage = <String, double>{};
-    final muscleEntries = muscleUsage.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value)); // 내림차순 정렬
-
-    for (final entry in muscleEntries) {
-      sortedMuscleUsage[entry.key] = entry.value;
-    }
+    final sortedMuscleUsage = Map.fromEntries(sortedEntries);
 
     return {
       'detailed_muscle_usage': sanitizeOutputMap(sortedMuscleUsage),
-      'rom_data': sanitizeOutputMap(romData),
-      'biomech_pattern': biomechPattern,
+      'biomech_pattern': regionDominance,
+      'rom_data': sanitizeOutputMap(jointDeltas),
     };
   }
 
@@ -986,7 +763,7 @@ class MuscleMetricUtils {
       'ankle': '비복근',
     };
 
-    return mapping[_normalizeJointName(jointName)] ?? jointName;
+    return mapping[jointName.toLowerCase()] ?? jointName;
   }
 
   /// 중력 벡터 각도 계산 (하위 호환성)
