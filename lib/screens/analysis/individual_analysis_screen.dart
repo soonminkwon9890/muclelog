@@ -560,7 +560,7 @@ class _IndividualAnalysisScreenState extends State<IndividualAnalysisScreen> {
 
   /// 관절명 한글 변환
   String _getJointName(String key) {
-    return MuscleNameMapper.getJointDisplayName(key);
+    return MuscleNameMapper.localize(key);
   }
 
   /// 근육명 한글 변환

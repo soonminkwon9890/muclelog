@@ -456,7 +456,7 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
           color: isHighlighted ? Colors.blue.shade50 : Colors.white,
       child: ExpansionTile(
             initiallyExpanded: isExpanded,
-            title: Text(MuscleNameMapper.getJointDisplayName(jointName)),
+            title: Text(MuscleNameMapper.localize(jointName)),
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
           children: [

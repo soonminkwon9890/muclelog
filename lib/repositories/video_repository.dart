@@ -4,9 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import '../services/storage_service.dart';
 import '../services/supabase_service.dart';
-import '../services/muscle_usage_analysis_service.dart';
 import '../services/pose_detection_service.dart';
-import '../services/gemini_workout_service.dart';
 import '../models/analysis_log.dart';
 import '../models/motion_type.dart';
 import '../models/body_part.dart';
@@ -41,128 +39,30 @@ class VideoRepository {
     // ExerciseType을 targetArea 문자열로 변환 (대문자)
     final targetArea = exerciseType.value.toUpperCase(); // 'upper' -> 'UPPER'
     try {
-      // 1. 로컬 분석 수행
-      if (onProgress != null) onProgress(0.1);
-      debugPrint('📊 로컬 영상 분석 시작 (타겟 부위: $targetArea)');
-
-      final localResult = await MuscleUsageAnalysisService.instance
-          .analyzeVideo(
-            videoFile,
-            targetArea: targetArea,
-            motionType: motionType,
-            onProgress: (progress) {
-              if (onProgress != null) {
-                onProgress(0.1 + (progress * 0.6)); // 10% ~ 70%
-              }
-            },
-          );
-      debugPrint('🟢 로컬 영상 분석 완료: $localResult');
-
-      // 2. 영상 파일명 생성 및 Storage 업로드
+      // 1. 영상 파일명 생성 및 Storage 업로드
       final fileName = '${DateTime.now().millisecondsSinceEpoch}.mp4';
       final storagePath = StorageService.instance.generateVideoPath(
         userId,
         fileName,
       );
 
-      if (onProgress != null) onProgress(0.7);
+      if (onProgress != null) onProgress(0.3);
       final videoUrl = await StorageService.instance.uploadVideo(
         file: videoFile,
         path: storagePath,
         onProgress: (progress) {
           if (onProgress != null) {
-            onProgress(0.7 + (progress * 0.2)); // 70% ~ 90%
+            onProgress(0.3 + (progress * 0.2)); // 30% ~ 50%
           }
         },
       );
 
-      // 3. workout_logs 테이블에 영상 메타데이터 저장
-      // 🔧 중요: videos 테이블이 삭제되고 workout_logs로 통합됨
-      if (onProgress != null) onProgress(0.9);
-      final videoResponse = await SupabaseService.instance.client
-          .from('workout_logs')
-          .insert({
-            'user_id': userId,
-            'video_path': videoUrl, // video_url -> video_path
-            'exercise_name': videoTitle, // video_title -> exercise_name
-            'body_part': bodyPart
-                .value, // target_area -> body_part (BodyPart enum value)
-            'motion_type': motionType.value, // 운동 방식 타입 저장
-            'contraction_type': motionType.value, // contraction_type 추가
-            'analysis_result': localResult, // 로컬 분석 결과 저장 (하위 호환성)
-          })
-          .select()
-          .single();
-
-      final videoId = (videoResponse['id'] ?? '')
-          .toString(); // 안전 변환 (workout_logs.id)
-
-      // 🔧 UUID 유효성 검사: 빈 문자열이면 예외 발생
-      if (videoId.isEmpty) {
-        throw Exception('workout_logs 테이블 저장 실패: ID가 반환되지 않았습니다.');
-      }
-
-      debugPrint('📹 workout_logs 테이블 저장 완료: $videoId');
-
-      // 4. workout_logs 테이블 업데이트 (추가 분석 데이터 저장)
-      // 이미 workout_logs에 기본 정보가 저장되어 있으므로, 추가 데이터만 update
-      // reference_gravity 추출 (ISOMETRIC일 때만)
-      List<double>? referenceGravity;
-      if (motionType == MotionType.isometric &&
-          localResult['reference_gravity'] != null) {
-        referenceGravity = List<double>.from(
-          localResult['reference_gravity'] as List,
-        );
-      }
-
-      // analysis_raw_data 구성 (운동 타입별 Raw Data)
-      Map<String, dynamic>? analysisRawData;
-      switch (motionType) {
-        case MotionType.isometric:
-          analysisRawData = {
-            'gravity_angle_deviations': localResult['raw_data'] ?? [],
-            'reference_gravity': referenceGravity,
-          };
-          break;
-        case MotionType.isokinetic:
-          analysisRawData = {
-            'angular_velocities': localResult['raw_data'] ?? [],
-            'timestamps': localResult['timestamps'] ?? [],
-          };
-          break;
-        case MotionType.isotonic:
-          analysisRawData = {
-            'usage_distribution': localResult['usage_distribution'] ?? {},
-            'total_activity_score': localResult['total_activity_score'] ?? 0.0,
-          };
-          break;
-      }
-
-      // workout_logs 테이블 업데이트 (추가 필드)
-      await SupabaseService.instance.client
-          .from('workout_logs')
-          .update({
-            'status': 'COMPLETED',
-            'analysis_result': localResult, // 기존 형식 (하위 호환성)
-            'reference_gravity': referenceGravity, // 등척성 운동용 중력 벡터
-            'analysis_raw_data': analysisRawData, // 원본 측정 데이터
-          })
-          .eq('id', videoId);
-
-      final logId = videoId; // workout_logs.id와 동일
-
-      // 🔧 UUID 유효성 재확인
-      if (logId.isEmpty) {
-        throw Exception('workout_logs 테이블 업데이트 실패: ID가 유효하지 않습니다.');
-      }
-
-      debugPrint('📝 workout_logs 테이블 업데이트 완료: $logId');
-
-      // 5. Pose 데이터 기반 근육 활성도 계산 및 analysis_result에 추가
+      // 2. Pose 데이터 기반 근육 활성도 계산
       Map<String, double> muscleUsage = {};
       List<Pose> poses = [];
       List<int> timestamps = [];
 
+      if (onProgress != null) onProgress(0.5);
       try {
         // 비디오에서 Pose 추출 (timestamp 포함)
         final poseResult = await PoseDetectionService.instance
@@ -171,7 +71,7 @@ class VideoRepository {
               sampleRate: 5, // 1초에 5프레임
               onProgress: (progress) {
                 if (onProgress != null) {
-                  onProgress(0.95 + (progress * 0.02)); // 95% ~ 97%
+                  onProgress(0.5 + (progress * 0.4)); // 50% ~ 90%
                 }
               },
             );
@@ -196,12 +96,6 @@ class VideoRepository {
           debugPrint(
             '✅ [VideoRepository] 근육 활성도 계산 완료: ${muscleUsage.length}개 근육',
           );
-
-          // localResult에 muscle_usage 추가
-          localResult['muscle_usage'] = muscleUsage;
-          debugPrint(
-            '📊 [VideoRepository] analysis_result에 muscle_usage 추가 완료',
-          );
         } else {
           debugPrint('⚠️ [VideoRepository] Pose 데이터가 부족하여 근육 활성도 계산 건너뜀');
         }
@@ -211,52 +105,40 @@ class VideoRepository {
         debugPrint('⚠️ 스택 트레이스: $stackTrace');
       }
 
-      // 6. analysis_result 업데이트 (muscle_usage 포함)
-      if (muscleUsage.isNotEmpty) {
-        await SupabaseService.instance.client
-            .from('workout_logs')
-            .update({
-              'analysis_result': localResult, // muscle_usage 포함된 최신 데이터
-            })
-            .eq('id', videoId);
-        debugPrint(
-          '📝 [VideoRepository] analysis_result 업데이트 완료 (muscle_usage 포함)',
-        );
+      // 3. analysis_result 구성 (MuscleMetricUtils 결과 기반)
+      final analysisResult = <String, dynamic>{
+        'muscle_usage': muscleUsage,
+        'biomech_pattern': targetArea,
+      };
+
+      // 4. workout_logs 테이블에 영상 메타데이터 저장
+      if (onProgress != null) onProgress(0.9);
+      final videoResponse = await SupabaseService.instance.client
+          .from('workout_logs')
+          .insert({
+            'user_id': userId,
+            'video_path': videoUrl,
+            'exercise_name': videoTitle,
+            'body_part': bodyPart.value,
+            'motion_type': motionType.value,
+            'contraction_type': motionType.value,
+            'status': 'COMPLETED',
+            'analysis_result': analysisResult,
+          })
+          .select()
+          .single();
+
+      final videoId = (videoResponse['id'] ?? '')
+          .toString(); // 안전 변환 (workout_logs.id)
+
+      // 🔧 UUID 유효성 검사: 빈 문자열이면 예외 발생
+      if (videoId.isEmpty) {
+        throw Exception('workout_logs 테이블 저장 실패: ID가 반환되지 않았습니다.');
       }
 
-      // 7. Gemini 백엔드 분석 수행 (Pose 데이터 기반)
-      if (onProgress != null) onProgress(0.97);
-      debugPrint('🤖 [VideoRepository] Gemini 백엔드 분석 시작');
+      debugPrint('📹 workout_logs 테이블 저장 완료: $videoId');
 
-      try {
-        // Pose 데이터는 이미 추출되어 있음 (위에서 사용)
-
-        // Gemini 백엔드로 분석 요청 (timestamp 포함)
-        final geminiResult = await GeminiWorkoutService.instance
-            .analyzeWorkoutWithGemini(
-              poses: poses,
-              timestamps: timestamps,
-              bodyPart: bodyPart,
-              motionType: motionType,
-              exerciseName: videoTitle,
-              userId: userId,
-              logId: videoId, // videoId (UUID) 사용
-            );
-
-        debugPrint('✅ [VideoRepository] Gemini 분석 완료');
-        debugPrint(
-          '   - Overall Score: ${geminiResult['scores']?['overall_score']}',
-        );
-        debugPrint('   - Applied Logics: ${geminiResult['applied_logics']}');
-
-        // 참고: Gemini 분석 결과는 백엔드(analyze-workout.ts)에서 이미
-        // Supabase의 analysis_core_results 테이블에 저장됩니다.
-        // 추가 저장 로직이 필요하지 않습니다.
-      } catch (e, stackTrace) {
-        // Gemini 분석 실패는 치명적이지 않으므로 로그만 남기고 계속 진행
-        debugPrint('⚠️ [VideoRepository] Gemini 분석 실패 (계속 진행): $e');
-        debugPrint('⚠️ 스택 트레이스: $stackTrace');
-      }
+      final logId = videoId; // workout_logs.id와 동일
 
       if (onProgress != null) onProgress(1.0);
 
@@ -275,255 +157,244 @@ class VideoRepository {
     }
   }
 
-  /// 단일 Pose에서 관절의 절대 각도 계산
-  /// [pose] 현재 프레임의 Pose
-  /// 반환: 관절별 절대 각도 맵 (도 단위)
-  Map<String, double?> _calculateJointAbsoluteAngles(Pose pose) {
-    final angles = <String, double?>{};
-
-    try {
-      // 어깨 각도 (왼쪽 어깨-팔꿈치-손목)
-      final leftShoulder = pose.landmarks[PoseLandmarkType.leftShoulder];
-      final leftElbow = pose.landmarks[PoseLandmarkType.leftElbow];
-      final leftWrist = pose.landmarks[PoseLandmarkType.leftWrist];
-      if (leftShoulder != null && leftElbow != null && leftWrist != null) {
-        angles['shoulder'] = _calculateAngle(
-          leftShoulder,
-          leftElbow,
-          leftWrist,
-        );
-      }
-
-      // 무릎 각도 (고관절-무릎-발목)
-      final leftHip = pose.landmarks[PoseLandmarkType.leftHip];
-      final leftKnee = pose.landmarks[PoseLandmarkType.leftKnee];
-      final leftAnkle = pose.landmarks[PoseLandmarkType.leftAnkle];
-      if (leftHip != null && leftKnee != null && leftAnkle != null) {
-        angles['knee'] = _calculateAngle(leftHip, leftKnee, leftAnkle);
-      }
-
-      // 고관절 각도 (어깨-고관절-무릎)
-      final rightShoulder = pose.landmarks[PoseLandmarkType.rightShoulder];
-      final rightHip = pose.landmarks[PoseLandmarkType.rightHip];
-      final rightKnee = pose.landmarks[PoseLandmarkType.rightKnee];
-      if (rightShoulder != null && rightHip != null && rightKnee != null) {
-        angles['hip'] = _calculateAngle(rightShoulder, rightHip, rightKnee);
-      }
-
-      // 팔꿈치 각도 (어깨-팔꿈치-손목)
-      final rightElbow = pose.landmarks[PoseLandmarkType.rightElbow];
-      final rightWrist = pose.landmarks[PoseLandmarkType.rightWrist];
-      if (leftShoulder != null && rightElbow != null && rightWrist != null) {
-        angles['elbow'] = _calculateAngle(leftShoulder, rightElbow, rightWrist);
-      }
-
-      // 나머지 관절들은 기본값 null
-      angles['neck'] = null;
-      angles['spine'] = null;
-      angles['wrist'] = null;
-      angles['ankle'] = null;
-    } catch (e) {
-      debugPrint('⚠️ [VideoRepository] 절대 각도 계산 오류: $e');
-    }
-
-    return angles;
-  }
-
-  /// 반복 패턴 감지 (등장성 운동: 증가-감소 패턴)
-  /// [angles] 관절 각도 시퀀스
-  /// 반환: 반복 패턴이 감지되면 true
-  bool _detectRepetitionPattern(List<double> angles) {
-    if (angles.length < 3) {
-      return false;
-    }
-
-    // 🔧 Peak-to-Peak 패턴 감지: 최소 2번 이상 증가-감소 패턴이 있어야 함
-    int directionChanges = 0; // 방향 전환 횟수
-    bool? prevDirection; // true: 증가, false: 감소, null: 초기
-
-    for (int i = 1; i < angles.length; i++) {
-      final diff = angles[i] - angles[i - 1];
-      final threshold = 2.0; // 2도 이상 변화만 유의미한 것으로 간주
-
-      if (diff.abs() < threshold) {
-        continue; // 미세한 변화는 무시
-      }
-
-      final currentDirection = diff > 0; // 증가면 true, 감소면 false
-
-      if (prevDirection != null && prevDirection != currentDirection) {
-        // 방향이 바뀌었음 (증가 -> 감소 또는 감소 -> 증가)
-        directionChanges++;
-      }
-
-      prevDirection = currentDirection;
-    }
-
-    // 🔧 방향 전환이 2번 이상이면 반복 패턴으로 간주
-    // (예: 증가 -> 감소 -> 증가 = 2번 전환 = 1회 반복)
-    return directionChanges >= 2;
-  }
-
   /// [motionType] 운동 방식 타입
   /// [targetArea] 사용자 선택 부위 (UPPER, LOWER, FULL)
   /// 반환: 근육별 활성도 맵 (`Map<String, double>`)
+  // [Main Function] 포즈 데이터로부터 근육 활성도 계산
   Future<Map<String, double>> _calculateMuscleUsageFromPoses({
     required List<Pose> poses,
     required List<int> timestamps,
     required MotionType motionType,
     required String targetArea,
   }) async {
-    if (poses.length < 2) {
-      return {};
-    }
+    if (poses.isEmpty) return {};
 
-    // 🔧 1. 프레임 트리밍: 앞쪽 10%와 뒤쪽 10% 제거 (준비/마무리 동작 제거)
-    final totalFrames = poses.length;
-    final trimStart = (totalFrames * 0.1).floor();
-    final trimEnd = (totalFrames * 0.9).floor();
-    final trimmedPoses = poses.sublist(trimStart, trimEnd);
+    double duration = (timestamps.last - timestamps.first) / 1000.0;
+    if (duration <= 0) duration = 1.0;
 
-    if (trimmedPoses.length < 2) {
-      debugPrint('⚠️ [VideoRepository] 트리밍 후 프레임이 부족함: ${trimmedPoses.length}');
-      return {};
-    }
-
-    debugPrint(
-      '✅ [VideoRepository] 프레임 트리밍: 전체 $totalFrames개 -> 분석 ${trimmedPoses.length}개 (앞 $trimStart개, 뒤 ${totalFrames - trimEnd}개 제거)',
-    );
-
-    final muscleUsageMap = <String, double>{};
-
-    // 🔧 2. 각 관절의 각도 시퀀스 계산 (전체 프레임에 대해)
-    final jointAnglesMap = <String, List<double>>{};
-    final jointNames = [
-      'neck',
+    // 1. 관심 관절 정의 (요추 'spine' 포함)
+    final interestJoints = [
+      'leftHip',
+      'rightHip',
+      'leftKnee',
+      'rightKnee',
+      'leftShoulder',
+      'rightShoulder',
+      'leftElbow',
+      'rightElbow',
       'spine',
-      'shoulder',
-      'elbow',
-      'wrist',
-      'hip',
-      'knee',
-      'ankle',
     ];
 
-    for (final jointName in jointNames) {
-      jointAnglesMap[jointName] = [];
-    }
+    Map<String, double> jointDeltas = {};
+    Map<String, double> jointVariances = {};
+    Map<String, double> jointVelocities = {};
+    Map<String, double> visibilityMap = {};
 
-    // 🔧 각 프레임에서 관절 각도 계산 (절대 각도)
-    for (final pose in trimmedPoses) {
-      final jointAngles = _calculateJointAbsoluteAngles(pose);
-      for (final entry in jointAngles.entries) {
-        final jointName = entry.key;
-        final angle = entry.value;
-        if (angle != null) {
-          jointAnglesMap[jointName]?.add(angle);
+    double totalRhythmScore = 0.0;
+    int validRhythmFrames = 0;
+
+    // 2. 관절 데이터 추출 루프
+    for (String joint in interestJoints) {
+      List<double> angles = [];
+      double totalDelta = 0.0;
+      double totalVis = 0.0;
+
+      for (int i = 0; i < poses.length; i++) {
+        double angle = 0.0;
+        double vis = 0.0;
+
+        try {
+          if (joint == 'spine') {
+            // [Spine Special Logic] 어깨 중점과 골반 중점을 잇는 각도 계산
+            final leftShoulder =
+                poses[i].landmarks[PoseLandmarkType.leftShoulder]!;
+            final rightShoulder =
+                poses[i].landmarks[PoseLandmarkType.rightShoulder]!;
+            final leftHip = poses[i].landmarks[PoseLandmarkType.leftHip]!;
+            final rightHip = poses[i].landmarks[PoseLandmarkType.rightHip]!;
+
+            double midShoulderX = (leftShoulder.x + rightShoulder.x) / 2;
+            double midShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+            double midHipX = (leftHip.x + rightHip.x) / 2;
+            double midHipY = (leftHip.y + rightHip.y) / 2;
+
+            angle =
+                (math.atan2(midHipY - midShoulderY, midHipX - midShoulderX) *
+                        180 /
+                        math.pi)
+                    .abs();
+            // 4개 점의 평균 신뢰도 사용
+            vis =
+                (leftShoulder.likelihood +
+                    rightShoulder.likelihood +
+                    leftHip.likelihood +
+                    rightHip.likelihood) /
+                4;
+          } else {
+            // [General Joint Logic]
+            angle = _extractJointAngle(poses[i], joint);
+            vis = _extractJointVisibility(poses[i], joint);
+          }
+        } catch (e) {
+          continue;
+        }
+
+        angles.add(angle);
+        totalVis += vis;
+
+        if (i > 0) {
+          double d = (angles[i] - angles[i - 1]).abs();
+          if (d < 30.0) totalDelta += d; // 급격한 튀는 값 필터링
         }
       }
-    }
 
-    // 🔧 3. Peak-to-Peak ROM 계산 및 최소 ROM 필터 (15도 미만 제거)
-    final jointDeltas = <String, double>{};
-    final jointPeakToPeakMap = <String, double>{};
+      // 결과 저장
+      jointDeltas[joint] = totalDelta;
+      jointVelocities[joint] = totalDelta / duration;
+      visibilityMap[joint] = angles.isNotEmpty
+          ? (totalVis / angles.length)
+          : 0.0;
 
-    for (final entry in jointAnglesMap.entries) {
-      final jointName = entry.key;
-      final angles = entry.value;
-
-      if (angles.isEmpty) {
-        jointDeltas[jointName] = 0.0;
-        jointPeakToPeakMap[jointName] = 0.0;
-        continue;
-      }
-
-      // Peak-to-Peak 계산: 최고점 - 최저점
-      final maxAngle = angles.reduce((a, b) => a > b ? a : b);
-      final minAngle = angles.reduce((a, b) => a < b ? a : b);
-      final peakToPeak = maxAngle - minAngle;
-      jointPeakToPeakMap[jointName] = peakToPeak;
-
-      // 🔧 최소 ROM 필터: 15도 미만인 관절은 0점 처리
-      if (peakToPeak < 15.0) {
-        jointDeltas[jointName] = 0.0;
-        debugPrint(
-          '🔇 [VideoRepository] 관절 $jointName: Peak-to-Peak ${peakToPeak.toStringAsFixed(1)}° < 15° -> 0점 처리 (미세 움직임 무시)',
-        );
+      // 분산(Variance) 계산 - 등척성 안정성 분석용
+      if (angles.isNotEmpty) {
+        double mean = angles.reduce((a, b) => a + b) / angles.length;
+        double variance =
+            angles.map((a) => (a - mean) * (a - mean)).reduce((a, b) => a + b) /
+            angles.length;
+        jointVariances[joint] = variance;
       } else {
-        // 🔧 등장성 패턴 감지: 증가-감소 패턴 확인
-        final hasRepetitionPattern = _detectRepetitionPattern(angles);
-        if (hasRepetitionPattern) {
-          // 반복 패턴이 있으면 Peak-to-Peak을 그대로 사용
-          jointDeltas[jointName] = peakToPeak;
-          debugPrint(
-            '✅ [VideoRepository] 관절 $jointName: Peak-to-Peak ${peakToPeak.toStringAsFixed(1)}° (반복 패턴 감지)',
-          );
-        } else {
-          // 단순히 한 번만 움직인 경우는 점수를 낮춤 (50% 감소)
-          jointDeltas[jointName] = peakToPeak * 0.5;
-          debugPrint(
-            '⚠️ [VideoRepository] 관절 $jointName: Peak-to-Peak ${peakToPeak.toStringAsFixed(1)}° (반복 패턴 없음 -> 50% 감소)',
-          );
-        }
+        jointVariances[joint] = 100.0; // 데이터 없으면 매우 불안정으로 간주
       }
     }
 
-    // 🔧 4. 대표 프레임 선택 (트리밍된 프레임의 시작과 중간)
-    final trimmedMidIndex = (trimmedPoses.length / 2).floor();
-    final prevPose = trimmedPoses[0];
-    final currPose = trimmedPoses[trimmedMidIndex];
-
-    // MuscleMetricUtils를 사용하여 근육 활성도 계산
-    try {
-      final analysisResult = MuscleMetricUtils.performPhysicsBasedAnalysis(
-        prevPose: prevPose,
-        currPose: currPose,
-        jointDeltas: jointDeltas,
-        targetArea: targetArea,
-      );
-
-      // 결과에서 detailed_muscle_usage 추출 (performPhysicsBasedAnalysis의 반환값)
-      final muscleUsage =
-          analysisResult['detailed_muscle_usage'] as Map<String, double>?;
-      if (muscleUsage != null) {
-        muscleUsageMap.addAll(muscleUsage);
+    // 3. 상완골 리듬 평균 계산
+    for (var pose in poses) {
+      try {
+        double rhythm = MuscleMetricUtils.calculateInstantRhythm(
+          shoulderY: pose.landmarks[PoseLandmarkType.leftShoulder]!.y,
+          earY: pose.landmarks[PoseLandmarkType.leftEar]!.y,
+          elbowX: pose.landmarks[PoseLandmarkType.leftElbow]!.x,
+          elbowY: pose.landmarks[PoseLandmarkType.leftElbow]!.y,
+          shoulderX: pose.landmarks[PoseLandmarkType.leftShoulder]!.x,
+        );
+        totalRhythmScore += rhythm;
+        validRhythmFrames++;
+      } catch (e) {
+        // 상완골 리듬 계산 실패 시 해당 프레임은 무시하고 계속 진행
       }
-    } catch (e, stackTrace) {
-      debugPrint('⚠️ [VideoRepository] performPhysicsBasedAnalysis 실패: $e');
-      debugPrint('⚠️ 스택 트레이스: $stackTrace');
     }
+    double avgRhythm = validRhythmFrames > 0
+        ? totalRhythmScore / validRhythmFrames
+        : 1.0;
 
-    return muscleUsageMap;
+    // 4. 통합 분석 엔진 호출 (7개 파라미터 전달)
+    final analysisResult = MuscleMetricUtils.performAnalysis(
+      jointDeltas: jointDeltas,
+      jointVariances: jointVariances,
+      jointVelocities: jointVelocities,
+      visibilityMap: visibilityMap,
+      duration: duration,
+      averageRhythmScore: avgRhythm,
+      motionType: motionType.toString().split('.').last,
+      targetArea: targetArea,
+    );
+
+    return Map<String, double>.from(analysisResult['detailed_muscle_usage']);
   }
 
-  /// 세 점을 사용하여 각도 계산 (도 단위)
-  /// [point1] 첫 번째 점
-  /// [point2] 중간 점 (각도의 꼭짓점)
-  /// [point3] 세 번째 점
-  /// 반환: 각도 (도 단위)
-  double _calculateAngle(
-    PoseLandmark point1,
-    PoseLandmark point2,
-    PoseLandmark point3,
-  ) {
-    // 벡터 계산
-    final v1x = point1.x - point2.x;
-    final v1y = point1.y - point2.y;
-    final v2x = point3.x - point2.x;
-    final v2y = point3.y - point2.y;
-
-    // 내적과 크기 계산
-    final dot = v1x * v2x + v1y * v2y;
-    final mag1 = math.sqrt(v1x * v1x + v1y * v1y);
-    final mag2 = math.sqrt(v2x * v2x + v2y * v2y);
-
-    if (mag1 == 0.0 || mag2 == 0.0) {
-      return 0.0;
+  // [Helper 1] 관절 각도 추출
+  double _extractJointAngle(Pose pose, String joint) {
+    double getAngle(
+      PoseLandmarkType a,
+      PoseLandmarkType b,
+      PoseLandmarkType c,
+    ) {
+      final first = pose.landmarks[a]!;
+      final mid = pose.landmarks[b]!;
+      final last = pose.landmarks[c]!;
+      double radians =
+          math.atan2(last.y - mid.y, last.x - mid.x) -
+          math.atan2(first.y - mid.y, first.x - mid.x);
+      double angle = (radians * 180.0 / math.pi).abs();
+      if (angle > 180.0) angle = 360.0 - angle;
+      return angle;
     }
 
-    // 각도 계산 (라디안 → 도)
-    final cosAngle = dot / (mag1 * mag2);
-    final angleRad = math.acos(cosAngle.clamp(-1.0, 1.0));
-    return angleRad * 180.0 / math.pi;
+    switch (joint) {
+      case 'leftKnee':
+        return getAngle(
+          PoseLandmarkType.leftHip,
+          PoseLandmarkType.leftKnee,
+          PoseLandmarkType.leftAnkle,
+        );
+      case 'rightKnee':
+        return getAngle(
+          PoseLandmarkType.rightHip,
+          PoseLandmarkType.rightKnee,
+          PoseLandmarkType.rightAnkle,
+        );
+      case 'leftHip':
+        return getAngle(
+          PoseLandmarkType.leftShoulder,
+          PoseLandmarkType.leftHip,
+          PoseLandmarkType.leftKnee,
+        );
+      case 'rightHip':
+        return getAngle(
+          PoseLandmarkType.rightShoulder,
+          PoseLandmarkType.rightHip,
+          PoseLandmarkType.rightKnee,
+        );
+      case 'leftShoulder':
+        return getAngle(
+          PoseLandmarkType.leftHip,
+          PoseLandmarkType.leftShoulder,
+          PoseLandmarkType.leftElbow,
+        );
+      case 'rightShoulder':
+        return getAngle(
+          PoseLandmarkType.rightHip,
+          PoseLandmarkType.rightShoulder,
+          PoseLandmarkType.rightElbow,
+        );
+      case 'leftElbow':
+        return getAngle(
+          PoseLandmarkType.leftShoulder,
+          PoseLandmarkType.leftElbow,
+          PoseLandmarkType.leftWrist,
+        );
+      case 'rightElbow':
+        return getAngle(
+          PoseLandmarkType.rightShoulder,
+          PoseLandmarkType.rightElbow,
+          PoseLandmarkType.rightWrist,
+        );
+      default:
+        return 0.0;
+    }
+  }
+
+  // [Helper 2] 관절 신뢰도 추출
+  double _extractJointVisibility(Pose pose, String joint) {
+    switch (joint) {
+      case 'leftKnee':
+        return pose.landmarks[PoseLandmarkType.leftKnee]!.likelihood;
+      case 'rightKnee':
+        return pose.landmarks[PoseLandmarkType.rightKnee]!.likelihood;
+      case 'leftHip':
+        return pose.landmarks[PoseLandmarkType.leftHip]!.likelihood;
+      case 'rightHip':
+        return pose.landmarks[PoseLandmarkType.rightHip]!.likelihood;
+      case 'leftShoulder':
+        return pose.landmarks[PoseLandmarkType.leftShoulder]!.likelihood;
+      case 'rightShoulder':
+        return pose.landmarks[PoseLandmarkType.rightShoulder]!.likelihood;
+      case 'leftElbow':
+        return pose.landmarks[PoseLandmarkType.leftElbow]!.likelihood;
+      case 'rightElbow':
+        return pose.landmarks[PoseLandmarkType.rightElbow]!.likelihood;
+      default:
+        return 0.0;
+    }
   }
 }

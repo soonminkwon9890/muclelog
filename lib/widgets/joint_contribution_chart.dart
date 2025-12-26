@@ -116,7 +116,7 @@ class JointContributionChart extends StatelessWidget {
   }
 
   String _getJointName(String key) {
-    return MuscleNameMapper.getJointDisplayName(key);
+    return MuscleNameMapper.localize(key);
   }
 
   Color _getColorForJoint(String key) {

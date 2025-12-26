@@ -31,10 +31,6 @@ class JointContributionCard extends StatelessWidget {
     this.allContributions,
   });
 
-  String _getJointDisplayName(String jointKey) {
-    return MuscleNameMapper.getJointDisplayName(jointKey);
-  }
-
   @override
   Widget build(BuildContext context) {
     // Delta 계산 (비교 모드일 때)
@@ -73,7 +69,7 @@ class JointContributionCard extends StatelessWidget {
         initiallyExpanded: isExpanded,
         leading: const Icon(Icons.accessibility_new, size: 20),
         title: Text(
-          _getJointDisplayName(contribution.jointName),
+          MuscleNameMapper.localize(contribution.jointName),
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w500,

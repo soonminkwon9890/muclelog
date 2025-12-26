@@ -6,7 +6,6 @@ import '../../models/motion_type.dart';
 import '../../models/biomechanics_result.dart';
 import '../../utils/safe_calculations.dart';
 import '../../utils/muscle_name_mapper.dart';
-import '../../utils/muscle_metric_utils.dart';
 
 /// 분석 결과 화면
 /// 영상 위에 서버에서 분석 결과를 표시하는 화면
@@ -635,8 +634,8 @@ class _ResultScreenState extends State<ResultScreen>
           // 🔧 0.0% 차이는 표시하지 않음 (의미 없는 비교)
           if (diffPercent > 0.1) {
             // 🔧 원본 키를 그대로 전달하여 '왼쪽/오른쪽' 구분 유지
-            final firstName = MuscleNameMapper.getJointDisplayName(first.key);
-            final secondName = MuscleNameMapper.getJointDisplayName(second.key);
+            final firstName = MuscleNameMapper.localize(first.key);
+            final secondName = MuscleNameMapper.localize(second.key);
             comparisonTexts.add(
               '현재 동작에서는 $firstName이 $secondName보다 ${diffPercent.toStringAsFixed(1)}% 더 많이 사용되었습니다.',
             );
@@ -982,100 +981,35 @@ class _ResultScreenState extends State<ResultScreen>
     );
   }
 
-  /// 근육 점수 재계산 (1순위: calculateLayeredActivation 호출)
-  /// rom_data의 관절 각도를 사용하여 정밀하게 재계산
+  /// 근육 점수 가져오기 (DB에서 직접 사용)
+  /// 새 엔진은 이미 DB에 계산된 값을 사용하므로 재계산 불필요
   double? _recalculateMuscleScore(String muscleKey) {
-    if (_rawAnalysisData == null) {
-      return null;
+    // DB에서 로드한 muscleScores 데이터를 직접 사용
+    final muscleScores = _biomechanicsResult?.muscleScores;
+    if (muscleScores != null) {
+      final muscleScore = muscleScores[muscleKey];
+      if (muscleScore != null && muscleScore.score > 0) {
+        return muscleScore.score;
+      }
     }
 
-    try {
-      // rom_data에서 rom 추출 시도
-      final romData = _rawAnalysisData!['rom_data'] as Map<String, dynamic>?;
-      double? rom;
-      if (romData != null) {
-        // 근육-관절 매핑 규칙 적용
-        final jointKey = _getJointKeyForMuscle(muscleKey);
-        if (jointKey != null) {
-          // rom_data에서 직접 관절 각도 가져오기
-          final romValue = romData[jointKey];
-          if (romValue != null) {
-            // romValue가 숫자일 수도 있고, 객체일 수도 있음
-            if (romValue is num) {
-              rom = romValue.toDouble();
-            } else if (romValue is Map<String, dynamic>) {
-              // 객체 형식인 경우 rom_degrees 또는 rom 필드 추출
-              final romDegrees =
-                  romValue['rom_degrees'] ??
-                  romValue['romDegrees'] ??
-                  romValue['rom'] ??
-                  romValue['angle'];
-              if (romDegrees != null && romDegrees is num) {
-                rom = romDegrees.toDouble();
-              }
-            }
+    // analysis_result에서 muscle_usage 확인
+    if (_workoutLogResponse != null) {
+      final analysisResult = _workoutLogResponse!['analysis_result'] as Map<String, dynamic>?;
+      if (analysisResult != null) {
+        final muscleUsage = analysisResult['muscle_usage'] as Map<String, dynamic>?;
+        if (muscleUsage != null) {
+          final score = muscleUsage[muscleKey];
+          if (score != null && score is num && score > 0) {
+            return score.toDouble();
           }
         }
       }
-
-      // motion_data에서 deltaAngle 계산 시도
-      // (간단화: rom이 있으면 deltaAngle로 사용)
-      double? deltaAngle = rom;
-
-      // calculateLayeredActivation 호출 (motionType 파라미터 추가)
-      if (rom != null || deltaAngle != null) {
-        // contractionType을 motionType으로 변환
-        String? motionType;
-        if (_contractionType == 'Isometric') {
-          motionType = 'isometric';
-        } else if (_contractionType == 'Isokinetic') {
-          motionType = 'isokinetic';
-        } else {
-          motionType = 'isotonic'; // 기본값
-        }
-
-        final recalculated = MuscleMetricUtils.calculateLayeredActivation(
-          muscleKey: muscleKey,
-          deltaAngle: deltaAngle,
-          rom: rom,
-          timeDelta: 0.033,
-          motionType: motionType, // Context 기반 motionType 전달
-        );
-        if (recalculated > 0 && !recalculated.isNaN) {
-          debugPrint(
-            '✅ [ResultScreen] 근육 점수 재계산 성공: $muscleKey -> ${recalculated.toStringAsFixed(1)}% (motionType: $motionType)',
-          );
-          return recalculated;
-        }
-      }
-    } catch (e) {
-      debugPrint('⚠️ [ResultScreen] 근육 점수 재계산 실패: $e');
     }
 
     return null;
   }
 
-  /// 근육 키에 해당하는 관절 키 반환 (정밀한 매핑 규칙)
-  String? _getJointKeyForMuscle(String muscleKey) {
-    final lowerKey = muscleKey.toLowerCase();
-
-    // 하체 근육 -> 무릎/고관절
-    if (lowerKey.contains('quad') || lowerKey.contains('hamstring')) {
-      return 'knee';
-    } else if (lowerKey.contains('glute')) {
-      return 'hip';
-    }
-    // 상체 근육 -> 팔꿈치/어깨
-    else if (lowerKey.contains('bicep') || lowerKey.contains('tricep')) {
-      return 'elbow';
-    } else if (lowerKey.contains('deltoid') ||
-        lowerKey.contains('pec') ||
-        lowerKey.contains('lat')) {
-      return 'shoulder';
-    }
-
-    return null;
-  }
 
   /// 점수에 따른 색상 반환 (80↑ 초록, 50↑ 노랑, 그 외 회색)
   Color _getScoreColor(double score) {
