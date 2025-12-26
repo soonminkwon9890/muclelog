@@ -64,8 +64,8 @@ class AnalysisLog {
   final Map<String, double> detailedMuscleUsage; // non-nullable, 기본값 {}
   final String biomechPattern; // 기본값 "UNKNOWN"
 
-  // 🔧 VideoRepository에서 저장한 muscle_usage 데이터 (nullable)
-  final Map<String, double>? muscleUsage;
+  // 🔧 VideoRepository에서 저장한 muscle_usage 데이터 (항상 값 할당, 빈 맵 기본값)
+  final Map<String, double> muscleUsage;
 
   AnalysisLog({
     required this.logId,
@@ -87,11 +87,12 @@ class AnalysisLog {
     this.bodyPart,
     Map<String, double>? detailedMuscleUsage,
     String? biomechPattern,
-    this.muscleUsage,
+    Map<String, double>? muscleUsage,
   }) : exerciseType = exerciseType ?? ExerciseType.full,
        motionType = motionType ?? MotionType.isotonic,
        detailedMuscleUsage = detailedMuscleUsage ?? {},
-       biomechPattern = biomechPattern ?? 'UNKNOWN';
+       biomechPattern = biomechPattern ?? 'UNKNOWN',
+       muscleUsage = muscleUsage ?? {};
 
   /// Legacy 데이터를 새 형식으로 변환하는 매핑 함수 (public)
   static Map<String, double> convertLegacyToNew(
@@ -269,35 +270,46 @@ class AnalysisLog {
     // 새로운 데이터 구조 파싱 (우선순위 기반)
     Map<String, double> detailedMuscleUsage = {};
     String biomechPattern = 'UNKNOWN';
-    Map<String, double>? muscleUsage; // 🔧 VideoRepository에서 저장한 muscle_usage
+    Map<String, double> muscleUsage =
+        {}; // 🔧 VideoRepository에서 저장한 muscle_usage (항상 값 할당)
 
     // Priority 1: 신규 데이터 확인
     if (analysisResult != null) {
       // 🔧 muscle_usage (VideoRepository에서 저장한 데이터) 파싱
+      // 🔧 중요: 데이터가 null이거나 비어있으면 빈 맵 {}을 넣고, 절대로 더미 데이터를 넣지 않음
       try {
         final muscleUsageRaw =
             analysisResult['muscle_usage'] as Map<String, dynamic>?;
         if (muscleUsageRaw != null && muscleUsageRaw.isNotEmpty) {
-          muscleUsage = <String, double>{};
+          final parsedMuscleUsage = <String, double>{};
           for (final entry in muscleUsageRaw.entries) {
             final value = entry.value;
             if (value is num) {
-              muscleUsage[entry.key] = value.toDouble();
+              parsedMuscleUsage[entry.key] = value.toDouble();
             } else if (value is String) {
               // 문자열인 경우 숫자로 변환 시도
               final parsed = double.tryParse(value);
               if (parsed != null) {
-                muscleUsage[entry.key] = parsed;
+                parsedMuscleUsage[entry.key] = parsed;
               }
             }
           }
+          // 🔧 파싱된 데이터가 있으면 사용, 없으면 빈 맵
+          muscleUsage = parsedMuscleUsage.isNotEmpty
+              ? parsedMuscleUsage
+              : <String, double>{};
           debugPrint(
             '✅ [AnalysisLog] muscle_usage 파싱 완료: ${muscleUsage.length}개 근육',
           );
+        } else {
+          // 🔧 muscle_usage가 null이거나 비어있으면 빈 맵으로 설정 (더미 데이터 절대 사용 안 함)
+          muscleUsage = <String, double>{};
+          debugPrint('⚠️ [AnalysisLog] muscle_usage가 null이거나 비어있음 - 빈 맵 {} 사용');
         }
       } catch (e) {
         debugPrint('⚠️ [AnalysisLog] muscle_usage 파싱 실패: $e');
-        muscleUsage = null;
+        // 🔧 파싱 실패 시에도 빈 맵 사용 (더미 데이터 절대 사용 안 함)
+        muscleUsage = <String, double>{};
       }
 
       final newDetailedMuscleUsage =
@@ -305,7 +317,8 @@ class AnalysisLog {
       final newBiomechPattern = analysisResult['biomech_pattern']?.toString();
 
       // muscle_usage가 있으면 detailedMuscleUsage에도 복사
-      if (muscleUsage != null && muscleUsage.isNotEmpty) {
+      // 🔧 muscleUsage는 항상 값이 할당되므로 (빈 맵이든 실제 데이터든), 빈 맵 체크만 수행
+      if (muscleUsage.isNotEmpty) {
         detailedMuscleUsage = Map<String, double>.from(muscleUsage);
         biomechPattern = newBiomechPattern ?? 'UNKNOWN';
         debugPrint(
@@ -382,7 +395,8 @@ class AnalysisLog {
       bodyPart: bodyPart,
       detailedMuscleUsage: detailedMuscleUsage,
       biomechPattern: biomechPattern,
-      muscleUsage: muscleUsage, // 🔧 VideoRepository에서 저장한 muscle_usage
+      muscleUsage:
+          muscleUsage, // 🔧 VideoRepository에서 저장한 muscle_usage (항상 값 할당됨)
     );
   }
 

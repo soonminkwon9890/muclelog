@@ -1230,11 +1230,6 @@ class _ResultScreenState extends State<ResultScreen>
           final jointStat = entry.value;
           final romDegrees = jointStat.romDegrees;
 
-          // 🔧 디버그: 관절 키 형식 확인
-          debugPrint(
-            '🔍 [ResultScreen] 관절 키: $jointName -> ${MuscleNameMapper.getJointDisplayName(jointName)}',
-          );
-
           // ROM을 0~180도 범위로 정규화하여 progress 값 계산
           final romProgress = (romDegrees / 180.0).clamp(0.0, 1.0);
 
@@ -1262,7 +1257,7 @@ class _ResultScreenState extends State<ResultScreen>
                       Expanded(
                         child: Text(
                           // 🔧 원본 키(jointName)를 그대로 전달하여 '왼쪽/오른쪽' 구분 유지
-                          MuscleNameMapper.getJointDisplayName(jointName),
+                          MuscleNameMapper.localize(jointName),
                           style: const TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,

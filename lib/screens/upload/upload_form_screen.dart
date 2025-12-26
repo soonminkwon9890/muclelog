@@ -152,26 +152,21 @@ class _UploadFormScreenState extends State<UploadFormScreen> {
 
       // 🔧 결과 화면으로 이동 (히스토리 상세 화면과 완전히 동일)
       // 🔧 중요: 로컬 데이터를 넘기는 코드를 모두 제거하고, 서버에서 생성된 ID만 전달
-      // 🔧 pushReplacement 사용: 뒤로 가기 눌렀을 때 업로드 화면으로 다시 안 오게 함
+      // 🔧 목표: 히스토리 목록에서 클릭해서 들어가는 것과 완전히 똑같은 화면
       if (mounted) {
         final finalLogId = logId.isEmpty ? videoId : logId;
-        debugPrint(
-          '🔄 [UploadFormScreen] ResultScreen으로 이동: videoId=$videoId, logId=$finalLogId',
-        );
-        debugPrint(
-          '   📊 [UploadFormScreen] ID만 전달 - 화면 내부에서 DB에서 최신 데이터를 조회합니다',
-        );
-        debugPrint(
-          '   🔧 [UploadFormScreen] pushReplacement 사용 - 업로드 화면으로 돌아가지 않음',
-        );
-        // 🔧 pushReplacement: 업로드 화면을 히스토리로 대체
+        debugPrint('🔄 [UploadFormScreen] ResultScreen (히스토리 상세 화면)으로 이동');
+        debugPrint('   📊 videoId=$videoId, logId=$finalLogId');
+        debugPrint('   🔧 ID만 전달 - ResultScreen이 DB에서 최신 데이터를 자동으로 조회합니다');
+        // 🔧 pushReplacement: 업로드 화면을 히스토리 상세 화면으로 대체
+        // 🔧 뒤로 가기 시 업로드 화면으로 돌아가지 않고 이전 화면으로 이동
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => ResultScreen(
-              videoId: videoId, // workout_logs.id (UUID String)
+              videoId: videoId, // workout_logs.id (UUID String) - 필수
               logId: finalLogId, // workout_logs.id (UUID String) - DB 조회용
-              // 🔧 exerciseName 파라미터 제거 - DB에서 불러옴
-              // 🔧 로컬 객체 전달 없음 - ID만 전달
+              // 🔧 exerciseName 파라미터 전달 안 함 - ResultScreen이 DB에서 자동으로 불러옴
+              // 🔧 로컬 객체 전달 안 함 - ID만 전달하여 DB에서 최신 데이터를 강제로 조회
             ),
           ),
         );
