@@ -1131,7 +1131,7 @@ class _ResultScreenState extends State<ResultScreen>
           // 🔧 원본 키를 그대로 저장하여 '왼쪽/오른쪽' 구분 유지
           jointData[jointKey] = jointStat;
           debugPrint(
-            '✅ [ResultScreen] 관절 데이터 추가: $jointKey -> ROM: ${jointStat.romDegrees.toStringAsFixed(1)}°',
+            '✅ [ResultScreen] 관절 데이터 추가: $jointKey -> 기여도: ${jointStat.romDegrees.toStringAsFixed(1)}%',
           );
         }
       }
@@ -1173,10 +1173,26 @@ class _ResultScreenState extends State<ResultScreen>
           final entry = sorted[index];
           final jointName = entry.key; // 🔧 원본 키 (예: left_hip, hip_L 등)
           final jointStat = entry.value;
-          final romDegrees = jointStat.romDegrees;
+          // [주석 추가] jointStat.romDegrees 변수는 실제로는 기여도(%) 값이 들어있음
+          final contributionPercent = jointStat.romDegrees; // 변수명은 유지하되 의미는 %로 변경
 
-          // ROM을 0~180도 범위로 정규화하여 progress 값 계산
-          final romProgress = (romDegrees / 180.0).clamp(0.0, 1.0);
+          // Progress 계산: 0~100% 범위로 정규화 (기존 0~180도 대신)
+          final contributionProgress = (contributionPercent / 100.0).clamp(0.0, 1.0);
+
+          // [UX 강화] 동적 색상 결정 (기여도에 따라 색상 농도 변경)
+          Color getContributionColor(double percent) {
+            if (percent == 0.0) {
+              return Colors.grey; // 0%: 회색
+            } else if (percent < 20.0) {
+              return Colors.orange.shade300; // 0~20%: 연한 색 (미미함)
+            } else if (percent < 50.0) {
+              return Colors.orange.shade700; // 20~50%: 중간 색 (보조 사용됨)
+            } else {
+              return Colors.orange.shade900; // 50% 이상: 아주 진한 색 (주로 사용됨)
+            }
+          }
+
+          final contributionColor = getContributionColor(contributionPercent);
 
           return Card(
             margin: const EdgeInsets.only(bottom: 12.0),
@@ -1211,13 +1227,11 @@ class _ResultScreenState extends State<ResultScreen>
                         ),
                       ),
                       Text(
-                        '${SafeCalculations.formatValueOrNA(romDegrees)}°',
+                        '${SafeCalculations.formatValueOrNA(contributionPercent)}%',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
-                          color: romDegrees > 0
-                              ? Colors.orange.shade700
-                              : Colors.grey,
+                          color: contributionColor, // 동적 색상 적용
                         ),
                       ),
                     ],
@@ -1226,10 +1240,10 @@ class _ResultScreenState extends State<ResultScreen>
                   ClipRRect(
                     borderRadius: BorderRadius.circular(4),
                     child: LinearProgressIndicator(
-                      value: romProgress,
+                      value: contributionProgress, // 0~100% 기준 (기존 0~180도 대신)
                       backgroundColor: Colors.grey.shade200,
                       valueColor: AlwaysStoppedAnimation<Color>(
-                        Colors.orange.shade600,
+                        contributionColor, // 동적 색상 적용
                       ),
                       minHeight: 8,
                     ),

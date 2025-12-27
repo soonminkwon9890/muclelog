@@ -198,8 +198,6 @@ class VideoRepository {
     Map<String, double> jointVariances = {};
     Map<String, double> jointVelocities = {};
     Map<String, double> visibilityMap = {};
-    Map<String, double> minAngles = {};   // [New] ROM 계산용 Min
-    Map<String, double> maxAngles = {};   // [New] ROM 계산용 Max
 
     double totalRhythmScore = 0.0;
     int validRhythmFrames = 0;
@@ -209,10 +207,6 @@ class VideoRepository {
       List<double> angles = [];
       double totalDelta = 0.0;
       double totalVis = 0.0;
-
-      // [New] Min/Max 초기화
-      double minA = 360.0;
-      double maxA = 0.0;
 
       for (int i = 0; i < poses.length; i++) {
         double angle = 0.0;
@@ -257,12 +251,6 @@ class VideoRepository {
         angles.add(angle);
         totalVis += vis;
 
-        // [New] Min/Max 업데이트 (유효한 각도일 때만)
-        if (angle > 0) {
-          if (angle < minA) minA = angle;
-          if (angle > maxA) maxA = angle;
-        }
-
         if (i > 0) {
           double d = (angles[i] - angles[i - 1]).abs();
           if (d < 30.0) totalDelta += d; // 급격한 튀는 값 필터링
@@ -271,10 +259,6 @@ class VideoRepository {
 
       // 결과 저장
       jointDeltas[joint] = totalDelta;
-
-      // [New] Min/Max 저장
-      minAngles[joint] = minA;
-      maxAngles[joint] = maxA;
       jointVelocities[joint] = totalDelta / duration;
       visibilityMap[joint] = angles.isNotEmpty
           ? (totalVis / angles.length)
@@ -324,24 +308,7 @@ class VideoRepository {
       targetArea: targetArea,
     );
 
-    // [중요] UI 표시용 ROM 데이터 교체 (누적값 -> 실제 ROM Max-Min)
-    // 500도 같은 비정상적인 수치를 방지하기 위함
-    Map<String, double> realRomData = {};
-    for (String joint in interestJoints) {
-      double rom = 0.0;
-      // min/max 데이터가 유효한 경우에만 계산
-      if (maxAngles[joint] != null &&
-          minAngles[joint] != null &&
-          minAngles[joint] != 360.0) {
-        rom = (maxAngles[joint]! - minAngles[joint]!).abs();
-      }
-      realRomData[joint] = double.parse(rom.toStringAsFixed(1));
-    }
-
-    // 분석 결과의 rom_data 덮어쓰기
-    analysisResult['rom_data'] = realRomData;
-
-    // 전체 결과 반환 (detailed_muscle_usage, rom_data, biomech_pattern, stability_warning 포함)
+    // 전체 결과 반환 (MuscleMetricUtils에서 이미 %로 계산된 rom_data 포함)
     return analysisResult;
   }
 

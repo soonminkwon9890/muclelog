@@ -379,18 +379,19 @@ class MuscleMetricUtils {
       }
     }
 
-    // UI 표시용 ROM 데이터
-    final displayRomData = <String, double>{};
-    jointDeltas.forEach((k, v) {
-      double contrib = contributions[k] ?? 0.0;
-      displayRomData[k] = contrib > 0.01 ? v : 0.0;
+    // [중요] 관절 데이터(rom_data)를 '기여도 %'로 교체하여 반환
+    // (내부 계산용 jointDeltas는 유지하고, 보여주기용 데이터만 변경)
+    final displayJointData = <String, double>{};
+    contributions.forEach((k, v) {
+      // 1% 미만은 0으로 처리 (노이즈 제거)
+      displayJointData[k] = (v * 100.0);
     });
 
     return {
       'detailed_muscle_usage': sanitizeOutputMap(
         Map.fromEntries(sortedEntries),
       ),
-      'rom_data': sanitizeOutputMap(displayRomData),
+      'rom_data': sanitizeOutputMap(displayJointData), // 이제 여기엔 %가 들어감
       'biomech_pattern': targetArea,
       'stability_warning': stabilityWarning,
     };
