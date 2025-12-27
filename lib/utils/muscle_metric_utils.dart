@@ -334,9 +334,41 @@ class MuscleMetricUtils {
       jointVariances,
     );
 
-    // 4. 정렬
-    var sortedEntries = muscleScores.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
+    // 4. 정렬 (그룹핑 정렬 로직 적용)
+    // 로직: 같은 근육(예: 대퇴사두)의 좌/우를 묶고, 그룹 내 최고점을 기준으로 그룹 간 순서를 정함.
+
+    // 4-1. 그룹핑 (좌/우 제거한 이름 기준)
+    final grouped = <String, List<MapEntry<String, double>>>{};
+    for (var entry in muscleScores.entries) {
+      // 'left_', 'right_' 등 접두어를 제거하여 baseName 추출 (대소문자/언더스코어 모두 처리)
+      String baseName = entry.key
+          .toLowerCase()
+          .replaceFirst('left_', '')
+          .replaceFirst('right_', '')
+          .replaceFirst('left', '')
+          .replaceFirst('right', '')
+          .trim(); // 공백 제거
+
+      grouped.putIfAbsent(baseName, () => []).add(entry);
+    }
+
+    // 4-2. 그룹별 최고점 계산 및 그룹 정렬 (내림차순)
+    var sortedBaseNames = grouped.keys.toList();
+    sortedBaseNames.sort((a, b) {
+      // 각 그룹의 최고 점수 찾기
+      double maxA = grouped[a]!.map((e) => e.value).reduce(math.max);
+      double maxB = grouped[b]!.map((e) => e.value).reduce(math.max);
+      return maxB.compareTo(maxA);
+    });
+
+    // 4-3. 최종 리스트 생성 (그룹 순서대로, 그룹 내에서는 점수 높은 순)
+    final sortedEntries = <MapEntry<String, double>>[];
+    for (var baseName in sortedBaseNames) {
+      var entries = grouped[baseName]!;
+      // 그룹 내에서도 내림차순 (예: 왼쪽 60, 오른쪽 50이면 왼쪽이 위로)
+      entries.sort((a, b) => b.value.compareTo(a.value));
+      sortedEntries.addAll(entries);
+    }
 
     // 5. 등척성 경고 메시지
     String stabilityWarning = "";
