@@ -57,8 +57,13 @@ class VideoRepository {
         },
       );
 
-      // 2. Pose 데이터 기반 근육 활성도 계산
-      Map<String, double> muscleUsage = {};
+      // 2. Pose 데이터 기반 생체역학 분석 수행
+      Map<String, dynamic> analysisResult = {
+        'detailed_muscle_usage': <String, double>{},
+        'rom_data': <String, double>{},
+        'biomech_pattern': targetArea,
+        'stability_warning': '',
+      };
       List<Pose> poses = [];
       List<int> timestamps = [];
 
@@ -84,32 +89,29 @@ class VideoRepository {
           '✅ [VideoRepository] Timestamp 추출 완료: ${timestamps.length}개',
         );
 
-        // 근육 활성도 계산 (Pose 데이터 사용)
+        // 생체역학 분석 수행 (Pose 데이터 사용)
         if (poses.length >= 2) {
-          debugPrint('💪 [VideoRepository] 근육 활성도 계산 시작');
-          muscleUsage = await _calculateMuscleUsageFromPoses(
+          debugPrint('💪 [VideoRepository] 생체역학 분석 시작');
+          analysisResult = await _calculateMuscleUsageFromPoses(
             poses: poses,
             timestamps: timestamps,
             motionType: motionType,
             targetArea: targetArea,
           );
           debugPrint(
-            '✅ [VideoRepository] 근육 활성도 계산 완료: ${muscleUsage.length}개 근육',
+            '✅ [VideoRepository] 생체역학 분석 완료: ${(analysisResult['detailed_muscle_usage'] as Map).length}개 근육',
+          );
+          debugPrint(
+            '✅ [VideoRepository] ROM 데이터: ${(analysisResult['rom_data'] as Map).length}개 관절',
           );
         } else {
-          debugPrint('⚠️ [VideoRepository] Pose 데이터가 부족하여 근육 활성도 계산 건너뜀');
+          debugPrint('⚠️ [VideoRepository] Pose 데이터가 부족하여 생체역학 분석 건너뜀');
         }
       } catch (e, stackTrace) {
-        // 근육 활성도 계산 실패는 치명적이지 않으므로 로그만 남기고 계속 진행
-        debugPrint('⚠️ [VideoRepository] 근육 활성도 계산 실패 (계속 진행): $e');
+        // 생체역학 분석 실패는 치명적이지 않으므로 로그만 남기고 계속 진행
+        debugPrint('⚠️ [VideoRepository] 생체역학 분석 실패 (계속 진행): $e');
         debugPrint('⚠️ 스택 트레이스: $stackTrace');
       }
-
-      // 3. analysis_result 구성 (MuscleMetricUtils 결과 기반)
-      final analysisResult = <String, dynamic>{
-        'muscle_usage': muscleUsage,
-        'biomech_pattern': targetArea,
-      };
 
       // 4. workout_logs 테이블에 영상 메타데이터 저장
       if (onProgress != null) onProgress(0.9);
@@ -159,15 +161,22 @@ class VideoRepository {
 
   /// [motionType] 운동 방식 타입
   /// [targetArea] 사용자 선택 부위 (UPPER, LOWER, FULL)
-  /// 반환: 근육별 활성도 맵 (`Map<String, double>`)
+  /// 반환: 전체 분석 결과 (`Map<String, dynamic>`) - detailed_muscle_usage, rom_data, biomech_pattern, stability_warning 포함
   // [Main Function] 포즈 데이터로부터 근육 활성도 계산
-  Future<Map<String, double>> _calculateMuscleUsageFromPoses({
+  Future<Map<String, dynamic>> _calculateMuscleUsageFromPoses({
     required List<Pose> poses,
     required List<int> timestamps,
     required MotionType motionType,
     required String targetArea,
   }) async {
-    if (poses.isEmpty) return {};
+    if (poses.isEmpty) {
+      return {
+        'detailed_muscle_usage': <String, double>{},
+        'rom_data': <String, double>{},
+        'biomech_pattern': targetArea,
+        'stability_warning': '',
+      };
+    }
 
     double duration = (timestamps.last - timestamps.first) / 1000.0;
     if (duration <= 0) duration = 1.0;
@@ -299,7 +308,8 @@ class VideoRepository {
       targetArea: targetArea,
     );
 
-    return Map<String, double>.from(analysisResult['detailed_muscle_usage']);
+    // 전체 결과 반환 (detailed_muscle_usage, rom_data, biomech_pattern, stability_warning 포함)
+    return analysisResult;
   }
 
   // [Helper 1] 관절 각도 추출

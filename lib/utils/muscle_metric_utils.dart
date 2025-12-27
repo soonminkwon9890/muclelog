@@ -29,8 +29,10 @@ class MuscleMetricUtils {
     required double shoulderX,
   }) {
     double neckLength = (shoulderY - earY).abs();
-    double armAngleRad =
-        math.atan2((elbowY - shoulderY).abs(), (elbowX - shoulderX).abs());
+    double armAngleRad = math.atan2(
+      (elbowY - shoulderY).abs(),
+      (elbowX - shoulderX).abs(),
+    );
     double armAngleDeg = armAngleRad * (180 / math.pi);
 
     // 목 길이가 확보될수록 점수가 높음 (1.0 = 좋음, 0.0 = 으쓱)
@@ -81,11 +83,13 @@ class MuscleMetricUtils {
     bool suppressLower = target == 'UPPER';
 
     if (target != 'LOWER' && target != 'UPPER') {
-      double lowerSum = (contribution['leftHip'] ?? 0) +
+      double lowerSum =
+          (contribution['leftHip'] ?? 0) +
           (contribution['rightHip'] ?? 0) +
           (contribution['leftKnee'] ?? 0) +
           (contribution['rightKnee'] ?? 0);
-      double upperSum = (contribution['leftShoulder'] ?? 0) +
+      double upperSum =
+          (contribution['leftShoulder'] ?? 0) +
           (contribution['rightShoulder'] ?? 0) +
           (contribution['leftElbow'] ?? 0) +
           (contribution['rightElbow'] ?? 0);
@@ -99,7 +103,8 @@ class MuscleMetricUtils {
 
     // 억제 적용 (요추(spine)는 보상작용 감지를 위해 억제하지 않고 남겨둠)
     contribution.forEach((key, value) {
-      bool isLowerJoint = key.toLowerCase().contains('knee') ||
+      bool isLowerJoint =
+          key.toLowerCase().contains('knee') ||
           key.toLowerCase().contains('hip') ||
           key.toLowerCase().contains('ankle');
       bool isSpine = key.toLowerCase().contains('spine');
@@ -162,100 +167,123 @@ class MuscleMetricUtils {
   }
 
   // =======================================================
-  // [Step 3] 근육 매핑 및 요추 보상작용 적용 (Mapping)
+  // [Step 3] 근육 매핑 및 요추 안정성 평가 (Mapping)
   // =======================================================
   static Map<String, double> _mapToMuscles(
     Map<String, double> contributions,
     Map<String, double> qualities,
     double rhythmScore,
     String motionType,
-    String targetArea,
+    String targetArea, // 'UPPER', 'LOWER', 'FULL'
     Map<String, double> jointDeltas, // 요추 ROM 확인용
     Map<String, double> jointVariances, // 요추 떨림 확인용
   ) {
     final scores = <String, double>{};
 
-    // 기본 계산 함수
-    double calc(String jointKey) {
-      double contrib = contributions[jointKey] ?? 0.0;
-      double qual = qualities[jointKey] ?? 0.0;
-      return (qual * (contrib * 3.0)).clamp(0.0, 100.0);
+    // [1] 타겟 부위에 따른 가중치 설정
+    double upperMultiplier = 3.5;
+    double lowerMultiplier = 3.5;
+
+    if (targetArea.toUpperCase() == 'UPPER') {
+      upperMultiplier = 4.5;
+      lowerMultiplier = 1.0;
+    } else if (targetArea.toUpperCase() == 'LOWER') {
+      upperMultiplier = 1.0;
+      lowerMultiplier = 4.5;
     }
 
-    // ---------------- [기본 근육 매핑] ----------------
-    // 하체
-    scores['left_quadriceps'] = calc('leftKnee');
-    scores['right_quadriceps'] = calc('rightKnee');
-    scores['left_glutes'] = calc('leftHip');
-    scores['right_glutes'] = calc('rightHip');
-    scores['left_hamstrings'] =
-        (calc('leftHip') * 0.5 + calc('leftKnee') * 0.5);
-    scores['right_hamstrings'] =
-        (calc('rightHip') * 0.5 + calc('rightKnee') * 0.5);
+    // 기본 계산 함수 (multiplier 적용)
+    double calc(String jointKey, double multiplier) {
+      double contrib = contributions[jointKey] ?? 0.0;
+      double qual = qualities[jointKey] ?? 0.0;
+      return (qual * (contrib * multiplier)).clamp(0.0, 100.0);
+    }
 
-    // 상체 (상완골 리듬 적용)
-    double shoulderLeftRaw = calc('leftShoulder');
-    double shoulderRightRaw = calc('rightShoulder');
+    // --- 하체 근육 ---
+    scores['left_quadriceps'] = calc('leftKnee', lowerMultiplier);
+    scores['right_quadriceps'] = calc('rightKnee', lowerMultiplier);
+    scores['left_glutes'] = calc('leftHip', lowerMultiplier);
+    scores['right_glutes'] = calc('rightHip', lowerMultiplier);
+    scores['left_hamstrings'] =
+        (calc('leftHip', lowerMultiplier) * 0.5 +
+        calc('leftKnee', lowerMultiplier) * 0.5);
+    scores['right_hamstrings'] =
+        (calc('rightHip', lowerMultiplier) * 0.5 +
+        calc('rightKnee', lowerMultiplier) * 0.5);
+
+    // --- 상체 근육 ---
+    double shoulderLeftRaw = calc('leftShoulder', upperMultiplier);
+    double shoulderRightRaw = calc('rightShoulder', upperMultiplier);
 
     double trapFactor = (1.0 - rhythmScore).clamp(0.0, 1.0);
-    scores['trapezius'] = ((shoulderLeftRaw + shoulderRightRaw) * trapFactor * 1.5)
-        .clamp(0.0, 100.0);
+    scores['trapezius'] =
+        ((shoulderLeftRaw + shoulderRightRaw) * trapFactor * 1.5).clamp(
+          0.0,
+          100.0,
+        );
 
     double latsFactor = rhythmScore;
-    scores['left_latissimus'] =
-        (shoulderLeftRaw * latsFactor).clamp(0.0, 100.0);
-    scores['right_latissimus'] =
-        (shoulderRightRaw * latsFactor).clamp(0.0, 100.0);
 
-    scores['left_pectorals'] =
-        (shoulderLeftRaw * latsFactor * 0.9).clamp(0.0, 100.0);
-    scores['right_pectorals'] =
-        (shoulderRightRaw * latsFactor * 0.9).clamp(0.0, 100.0);
-
+    scores['left_latissimus'] = (shoulderLeftRaw * latsFactor).clamp(
+      0.0,
+      100.0,
+    );
+    scores['right_latissimus'] = (shoulderRightRaw * latsFactor).clamp(
+      0.0,
+      100.0,
+    );
+    scores['left_pectorals'] = (shoulderLeftRaw * latsFactor * 0.9).clamp(
+      0.0,
+      100.0,
+    );
+    scores['right_pectorals'] = (shoulderRightRaw * latsFactor * 0.9).clamp(
+      0.0,
+      100.0,
+    );
     scores['left_deltoids'] = shoulderLeftRaw;
     scores['right_deltoids'] = shoulderRightRaw;
 
-    scores['left_biceps'] = calc('leftElbow');
-    scores['right_biceps'] = calc('rightElbow');
-    scores['left_triceps'] = calc('leftElbow');
-    scores['right_triceps'] = calc('rightElbow');
+    scores['left_biceps'] = calc('leftElbow', upperMultiplier);
+    scores['right_biceps'] = calc('rightElbow', upperMultiplier);
+    scores['left_triceps'] = calc('leftElbow', upperMultiplier);
+    scores['right_triceps'] = calc('rightElbow', upperMultiplier);
 
-    // ---------------- [요추 보상작용 로직 (Lumbar Compensation)] ----------------
-
+    // [2] 기립근(Erector Spinae) = 안정성(Stability) 평가
     double spineRom = jointDeltas['spine'] ?? 0.0;
     double spineVar = jointVariances['spine'] ?? 0.0;
-
-    double compensationScore = 0.0;
+    double instabilityPenalty = 0.0;
 
     if (motionType == 'ISOTONIC') {
-      if (spineRom > 20.0) {
-        compensationScore = ((spineRom - 20.0) * 2.5).clamp(0.0, 100.0);
+      if (spineRom > 10.0) {
+        instabilityPenalty = ((spineRom - 10.0) * 4.0).clamp(0.0, 100.0);
       }
     } else {
       if (spineVar > 5.0) {
-        compensationScore = ((spineVar - 5.0) * 10.0).clamp(0.0, 100.0);
+        instabilityPenalty = ((spineVar - 5.0) * 10.0).clamp(0.0, 100.0);
       }
     }
 
-    // 기립근 점수 할당 (보상작용이 클수록 높음)
-    scores['erector_spinae'] = compensationScore;
+    double stabilityScore = (100.0 - instabilityPenalty).clamp(0.0, 100.0);
+    scores['erector_spinae'] = stabilityScore;
 
-    // 주동근 점수 삭감 (Energy Leak)
-    double reductionFactor = 1.0 - (compensationScore / 200.0); // 0.5 ~ 1.0
+    // [3] 에너지 누수(Energy Leak) 적용
+    double efficiencyFactor = 1.0 - (instabilityPenalty / 250.0);
 
     if (targetArea.toUpperCase() == 'UPPER') {
-      scores['left_latissimus'] = (scores['left_latissimus']! * reductionFactor);
+      scores['left_latissimus'] =
+          (scores['left_latissimus']! * efficiencyFactor);
       scores['right_latissimus'] =
-          (scores['right_latissimus']! * reductionFactor);
-      scores['left_pectorals'] = (scores['left_pectorals']! * reductionFactor);
-      scores['right_pectorals'] = (scores['right_pectorals']! * reductionFactor);
+          (scores['right_latissimus']! * efficiencyFactor);
+      scores['left_pectorals'] = (scores['left_pectorals']! * efficiencyFactor);
+      scores['right_pectorals'] =
+          (scores['right_pectorals']! * efficiencyFactor);
     } else if (targetArea.toUpperCase() == 'LOWER') {
-      scores['left_glutes'] = (scores['left_glutes']! * reductionFactor);
-      scores['right_glutes'] = (scores['right_glutes']! * reductionFactor);
+      scores['left_glutes'] = (scores['left_glutes']! * efficiencyFactor);
+      scores['right_glutes'] = (scores['right_glutes']! * efficiencyFactor);
       scores['left_hamstrings'] =
-          (scores['left_hamstrings']! * reductionFactor);
+          (scores['left_hamstrings']! * efficiencyFactor);
       scores['right_hamstrings'] =
-          (scores['right_hamstrings']! * reductionFactor);
+          (scores['right_hamstrings']! * efficiencyFactor);
     }
 
     return scores;
@@ -275,8 +303,11 @@ class MuscleMetricUtils {
     required String targetArea,
   }) {
     // 1. 관절 기여도 계산 (Quantity)
-    final contributions =
-        _calculateJointContribution(jointDeltas, visibilityMap, targetArea);
+    final contributions = _calculateJointContribution(
+      jointDeltas,
+      visibilityMap,
+      targetArea,
+    );
 
     // 2. 관절별 품질 평가 (Quality)
     final qualities = <String, double>{};
@@ -312,8 +343,7 @@ class MuscleMetricUtils {
     if (motionType.toUpperCase() == 'ISOMETRIC') {
       double spineVar = jointVariances['spine'] ?? 0.0;
       if (spineVar > 5.0) {
-        stabilityWarning =
-            "허리(요추)의 흔들림이 감지되었습니다. 코어에 더 집중하세요.";
+        stabilityWarning = "허리(요추)의 흔들림이 감지되었습니다. 코어에 더 집중하세요.";
       }
     }
 
@@ -325,7 +355,9 @@ class MuscleMetricUtils {
     });
 
     return {
-      'detailed_muscle_usage': sanitizeOutputMap(Map.fromEntries(sortedEntries)),
+      'detailed_muscle_usage': sanitizeOutputMap(
+        Map.fromEntries(sortedEntries),
+      ),
       'rom_data': sanitizeOutputMap(displayRomData),
       'biomech_pattern': targetArea,
       'stability_warning': stabilityWarning,
