@@ -395,16 +395,18 @@ class MuscleMetricUtils {
         .clamp(0.0, 100.0);
     scores['right_pectorals'] =
         (shoulderRightRaw * latsFactor * 0.9 * pecSynergy).clamp(0.0, 100.0);
-    scores['left_deltoids'] = (shoulderLeftRaw * deltSynergy).clamp(0.0, 100.0);
-    scores['right_deltoids'] = (shoulderRightRaw * deltSynergy).clamp(
-      0.0,
-      100.0,
-    );
+    // [Task 3] 상체 말단부 억제: 앵커링이 높을수록 팔/어깨 점수 감소
+    // 논리: "몸통(Core/Torso)으로 밀면 팔은 거들 뿐이다."
+    double armSuppression = 1.0 - ((pecSynergy - 1.0) * 0.6).clamp(0.0, 0.6);
+    // 예: pecSynergy = 1.5 -> armSuppression = 1.0 - 0.3 = 0.7 (30% 감소)
+    // 예: pecSynergy = 2.0 -> armSuppression = 1.0 - 0.6 = 0.4 (60% 감소, 최대)
 
-    scores['left_biceps'] = calc('leftElbow', upperMultiplier);
-    scores['right_biceps'] = calc('rightElbow', upperMultiplier);
-    scores['left_triceps'] = calc('leftElbow', upperMultiplier);
-    scores['right_triceps'] = calc('rightElbow', upperMultiplier);
+    scores['left_deltoids'] = (shoulderLeftRaw * deltSynergy * armSuppression).clamp(0.0, 100.0);
+    scores['right_deltoids'] = (shoulderRightRaw * deltSynergy * armSuppression).clamp(0.0, 100.0);
+    scores['left_biceps'] = (calc('leftElbow', upperMultiplier) * armSuppression).clamp(0.0, 100.0);
+    scores['right_biceps'] = (calc('rightElbow', upperMultiplier) * armSuppression).clamp(0.0, 100.0);
+    scores['left_triceps'] = (calc('leftElbow', upperMultiplier) * armSuppression).clamp(0.0, 100.0);
+    scores['right_triceps'] = (calc('rightElbow', upperMultiplier) * armSuppression).clamp(0.0, 100.0);
 
     // [2] 기립근(Erector Spinae) = 안정성(Stability) 평가
     double spineRom = jointDeltas['spine'] ?? 0.0;
@@ -585,27 +587,50 @@ class MuscleMetricUtils {
       }
     }
 
+    // [Task 1] 타겟 부위에 집중하기 위한 노이즈 필터링
+    // 선택하지 않은 부위의 관절 움직임은 분석에서 배제(축소)함
+    bool isUpperOnly = targetArea.toUpperCase() == 'UPPER';
+    bool isLowerOnly = targetArea.toUpperCase() == 'LOWER';
+
+    final filteredJointDeltas = Map<String, double>.from(adjustedJointDeltas);
+
+    for (var key in filteredJointDeltas.keys) {
+      bool isLowerJoint = key.toLowerCase().contains('hip') ||
+          key.toLowerCase().contains('knee') ||
+          key.toLowerCase().contains('ankle');
+      bool isUpperJoint = key.toLowerCase().contains('shoulder') ||
+          key.toLowerCase().contains('elbow') ||
+          key.toLowerCase().contains('wrist');
+
+      if (isUpperOnly && isLowerJoint) {
+        filteredJointDeltas[key] = (filteredJointDeltas[key] ?? 0) * 0.1; // 하체 무시
+      }
+      if (isLowerOnly && isUpperJoint) {
+        filteredJointDeltas[key] = (filteredJointDeltas[key] ?? 0) * 0.1; // 상체 무시
+      }
+    }
+
     // 1. 관절 기여도 계산 (Quantity)
     final contributions = _calculateJointContribution(
-      adjustedJointDeltas, // 미러링된 데이터 사용
+      filteredJointDeltas, // 필터링된 데이터 사용
       adjustedVisibilityMap, // 미러링된 데이터 사용
       targetArea,
     );
 
     // [New] JBJ 수치 보정 계수 계산 (텍스트 없음, 오직 숫자)
     final jbjFactors = _calculateJBJFactors(
-      adjustedJointDeltas, // 미러링된 데이터 사용
+      filteredJointDeltas, // 필터링된 데이터 사용
       targetArea.toUpperCase(),
     );
 
     // 2. 관절별 품질 평가 (JBJ 수치 적용)
     final qualities = <String, double>{};
-    for (final key in adjustedJointDeltas.keys) {
-      // 미러링된 데이터 사용
+    for (final key in filteredJointDeltas.keys) {
+      // 필터링된 데이터 사용
       // 기본 품질 점수 계산
       double baseQuality = _evaluateMovementQuality(
         key,
-        adjustedJointDeltas[key] ?? 0.0, // 미러링된 데이터 사용
+        filteredJointDeltas[key] ?? 0.0, // 필터링된 데이터 사용
         adjustedJointVariances[key] ?? 0.0, // 미러링된 데이터 사용
         adjustedJointVelocities[key] ?? 0.0, // 미러링된 데이터 사용
         duration,
@@ -621,7 +646,7 @@ class MuscleMetricUtils {
 
     // [Step 2.5] 복합 관절 시너지 계산
     final synergy = _calculateCompoundSynergy(
-      adjustedJointDeltas, // 미러링된 데이터 사용
+      filteredJointDeltas, // 필터링된 데이터 사용
       targetArea.toUpperCase(),
       averageRhythmScore, // 앵커링 효과 확인용
       jbjFactors, // JBJ 기반 협응도
@@ -635,7 +660,7 @@ class MuscleMetricUtils {
       averageRhythmScore,
       motionType.toUpperCase(),
       targetArea,
-      adjustedJointDeltas, // 미러링된 데이터 사용
+      filteredJointDeltas, // 필터링된 데이터 사용
       adjustedJointVariances, // 미러링된 데이터 사용
       synergy, // [New] 복합 관절 시너지 계수
     );
@@ -691,22 +716,22 @@ class MuscleMetricUtils {
 
     // 1. 최대 움직임 값 찾기 (Spine 제외)
     double maxDelta = 0.0;
-    adjustedJointDeltas.forEach((k, v) {
-      if (k != 'spine' && v > maxDelta) maxDelta = v;
-    });
+    for (var entry in filteredJointDeltas.entries) {
+      if (entry.key != 'spine' && entry.value > maxDelta) maxDelta = entry.value;
+    }
 
     // 2. 안전장치: 최대 움직임이 10도 미만이면 분석 결과 없음 (노이즈)
     if (maxDelta >= 10.0) {
-      adjustedJointDeltas.forEach((k, v) {
-        if (k == 'spine') return; // 기립근은 관절 탭 제외
+      for (var entry in filteredJointDeltas.entries) {
+        if (entry.key == 'spine') continue; // 기립근은 관절 탭 제외
 
-        double relativeScore = (v / maxDelta * 100.0);
+        double relativeScore = (entry.value / maxDelta * 100.0);
 
         // 10% 미만은 주동 관절이 아니라고 판단하여 제외
         if (relativeScore >= 10.0) {
-          displayJointData[k] = relativeScore;
+          displayJointData[entry.key] = relativeScore;
         }
-      });
+      }
     }
     // maxDelta < 10.0이면 displayJointData는 빈 맵으로 반환됨
 
