@@ -187,6 +187,8 @@ class VideoRepository {
       'rightHip',
       'leftKnee',
       'rightKnee',
+      'leftAnkle', // [New] 발목 추가
+      'rightAnkle', // [New] 발목 추가
       'leftShoulder',
       'rightShoulder',
       'leftElbow',
@@ -379,6 +381,18 @@ class VideoRepository {
           PoseLandmarkType.rightElbow,
           PoseLandmarkType.rightWrist,
         );
+      case 'leftAnkle':
+        return getAngle(
+          PoseLandmarkType.leftKnee,
+          PoseLandmarkType.leftAnkle,
+          PoseLandmarkType.leftHeel, // 발끝이 없으면 발뒤꿈치 사용
+        );
+      case 'rightAnkle':
+        return getAngle(
+          PoseLandmarkType.rightKnee,
+          PoseLandmarkType.rightAnkle,
+          PoseLandmarkType.rightHeel, // 발끝이 없으면 발뒤꿈치 사용
+        );
       default:
         return 0.0;
     }
@@ -403,6 +417,10 @@ class VideoRepository {
         return pose.landmarks[PoseLandmarkType.leftElbow]!.likelihood;
       case 'rightElbow':
         return pose.landmarks[PoseLandmarkType.rightElbow]!.likelihood;
+      case 'leftAnkle':
+        return pose.landmarks[PoseLandmarkType.leftAnkle]!.likelihood;
+      case 'rightAnkle':
+        return pose.landmarks[PoseLandmarkType.rightAnkle]!.likelihood;
       default:
         return 0.0;
     }

@@ -10,16 +10,9 @@ import '../../utils/muscle_name_mapper.dart';
 /// 분석 결과 화면
 /// 영상 위에 서버에서 분석 결과를 표시하는 화면
 class ResultScreen extends StatefulWidget {
-  final String videoId; // videos.id (UUID String) - 필수
-  final String? logId; // workout_logs.id (UUID String) - 하위 호환성 (선택)
-  // 🔧 exerciseName 파라미터 제거 - DB에서만 로드하여 일관성 보장
+  final String logId; // workout_logs.id (UUID String) - 필수
 
-  const ResultScreen({
-    super.key,
-    required this.videoId,
-    this.logId, // 선택적 파라미터로 변경
-    // 🔧 exerciseName 파라미터 제거 - DB에서만 로드
-  });
+  const ResultScreen({super.key, required this.logId});
 
   @override
   State<ResultScreen> createState() => _ResultScreenState();
@@ -101,128 +94,98 @@ class _ResultScreenState extends State<ResultScreen>
     _videoUrl = null;
     _errorMessage = null;
 
-    try {
-      debugPrint(
-        '🟢 [ResultScreen] 분석 결과 로드 시작: videoId=${widget.videoId}, logId=${widget.logId}',
-      );
-      debugPrint('   🔧 로컬 상태 초기화 완료 - DB에서 최신 데이터를 강제로 로드합니다');
+    // 재시도 로직 (최대 3회, 500ms 간격)
+    int retryCount = 0;
+    const maxRetries = 3;
+    const retryDelay = Duration(milliseconds: 500);
 
-      // 🔧 UUID 선택 로직:
-      // 1순위: logId가 null이 아니고 빈 문자열이 아닐 때 -> logId 사용
-      // 2순위: 그 외에는 항상 videoId 사용 (필수 파라미터)
-      final queryId = (widget.logId != null && widget.logId!.isNotEmpty)
-          ? widget.logId!
-          : widget.videoId;
-
-      // 🔧 UUID 유효성 검사: 최종 선택된 queryId가 빈 문자열이면 에러 표시
-      if (queryId.isEmpty) {
+    while (retryCount < maxRetries) {
+      try {
         setState(() {
-          _isLoading = false;
-          _errorMessage = '잘못된 접근입니다. ID가 전달되지 않았습니다.';
+          _isLoading = true;
         });
+
         debugPrint(
-          '🔴 [ResultScreen] queryId가 비어있음: videoId=${widget.videoId}, logId=${widget.logId}',
+          '🟢 [ResultScreen] DB 조회 시작: logId=${widget.logId}, 시도 ${retryCount + 1}/$maxRetries',
         );
 
-        // 2초 후 이전 화면으로 돌아가기
-        Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) {
-            Navigator.of(context).pop();
-          }
-        });
-        return;
-      }
-
-      // 1. workout_logs 테이블에서 분석 결과 조회
-      // Primary Key: id 사용 (logId가 있으면 우선 사용, 없으면 videoId 사용)
-      // 🔧 중요: workout_logs 테이블의 Primary Key는 'id' 컬럼입니다 (log_id 아님)
-      // 🔧 Fix: ai_analysis_result와 analysis_result 모두 조회하여 호환성 확보
-      // 🔧 exercise_name도 함께 조회하여 DB에서 최신 데이터 불러오기
-      final workoutLogResponse = await SupabaseService.instance.client
-          .from('workout_logs')
-          .select(
-            'ai_analysis_result, analysis_result, video_path, status, exercise_name',
-          )
-          .eq('id', queryId)
-          .maybeSingle();
-
-      // 🔧 workout_logs 전체 응답 저장 (analysis_result 직접 접근용)
-      _workoutLogResponse = workoutLogResponse;
-
-      // 🔧 DB에서 exercise_name 불러오기 (파라미터 대신 사용)
-      if (workoutLogResponse != null) {
-        _exerciseNameFromDb = workoutLogResponse['exercise_name']?.toString();
-        debugPrint(
-          '✅ [ResultScreen] DB에서 exercise_name 로드: $_exerciseNameFromDb',
-        );
-      }
-
-      // 🔧 Fix: status가 PENDING 또는 ANALYZING인 경우 분석 중 메시지 표시
-      if (workoutLogResponse != null) {
-        final status = workoutLogResponse['status']?.toString() ?? 'UNKNOWN';
-        debugPrint('🔍 [ResultScreen] 분석 상태 확인: status=$status');
-        if (status == 'PENDING' || status == 'ANALYZING') {
+        // UUID 유효성 검사
+        if (widget.logId.isEmpty) {
           setState(() {
             _isLoading = false;
-            _errorMessage = '분석이 진행 중입니다. 잠시 후 다시 시도해주세요.';
+            _errorMessage = '잘못된 접근입니다. ID가 전달되지 않았습니다.';
           });
-          debugPrint('⚠️ [ResultScreen] 분석 진행 중: status=$status');
+          debugPrint('🔴 [ResultScreen] logId가 비어있음');
           return;
         }
-      }
 
-      // 분석 결과 데이터 확인 (우선순위: ai_analysis_result > analysis_result)
-      Map<String, dynamic>? analysisData;
-      String? dataSource;
+        // 1. workout_logs 테이블에서 분석 결과 조회
+        // Primary Key: id 사용 (logId 사용)
+        // 🔧 중요: workout_logs 테이블의 Primary Key는 'id' 컬럼입니다
+        // 🔧 Fix: ai_analysis_result와 analysis_result 모두 조회하여 호환성 확보
+        // 🔧 exercise_name도 함께 조회하여 DB에서 최신 데이터 불러오기
+        final workoutLogResponse = await SupabaseService.instance.client
+            .from('workout_logs')
+            .select(
+              'ai_analysis_result, analysis_result, video_path, status, exercise_name',
+            )
+            .eq('id', widget.logId)
+            .maybeSingle();
 
-      if (workoutLogResponse != null) {
-        // 1순위: ai_analysis_result 확인
-        final aiResult = workoutLogResponse['ai_analysis_result'];
-        if (aiResult != null && aiResult is Map<String, dynamic>) {
-          analysisData = aiResult;
-          dataSource = 'ai_analysis_result';
-          debugPrint('✅ [ResultScreen] ai_analysis_result에서 데이터 발견');
-        }
-        // 2순위: analysis_result 확인 (ai_analysis_result가 없을 때만)
-        else {
-          final analysisResult = workoutLogResponse['analysis_result'];
-          if (analysisResult != null &&
-              analysisResult is Map<String, dynamic>) {
-            analysisData = analysisResult;
-            dataSource = 'analysis_result';
-            debugPrint('✅ [ResultScreen] analysis_result에서 데이터 발견');
-          }
-        }
-      }
-
-      if (analysisData != null) {
-        // 원본 데이터 저장 (rom_data, motion_data 접근용)
-        _rawAnalysisData = analysisData;
-
-        // Context 정보 추출
-        _extractContextInfo(analysisData);
-
-        // EnhancedAnalysisResult 형식으로 파싱
-        try {
-          _biomechanicsResult = BiomechanicsResult.fromAnalysisResult(
-            analysisData,
-          );
-          debugPrint('✅ [ResultScreen] workout_logs.$dataSource에서 로드 완료');
-          debugPrint(
-            '   - jointStats: ${_biomechanicsResult!.jointStats?.length ?? 0}개',
-          );
-          debugPrint(
-            '   - muscleScores: ${_biomechanicsResult!.muscleScores?.length ?? 0}개',
-          );
-        } catch (e, stackTrace) {
-          debugPrint('⚠️ [ResultScreen] BiomechanicsResult 파싱 실패: $e');
-          debugPrint('   스택: $stackTrace');
-          _biomechanicsResult = null;
-        }
-
-        // 영상 URL 가져오기
         if (workoutLogResponse != null) {
-          final videoPath = workoutLogResponse['video_path']?.toString();
+          final workoutLog = workoutLogResponse;
+          _workoutLogResponse = workoutLog;
+
+          // 분석 결과 데이터 추출
+          Map<String, dynamic>? analysisData;
+          String? dataSource;
+
+          // 1순위: ai_analysis_result 확인
+          final aiResult = workoutLog['ai_analysis_result'];
+          if (aiResult != null && aiResult is Map<String, dynamic>) {
+            analysisData = aiResult;
+            dataSource = 'ai_analysis_result';
+            debugPrint('✅ [ResultScreen] ai_analysis_result에서 데이터 발견');
+          }
+          // 2순위: analysis_result 확인 (ai_analysis_result가 없을 때만)
+          else {
+            final analysisResult = workoutLog['analysis_result'];
+            if (analysisResult != null &&
+                analysisResult is Map<String, dynamic>) {
+              analysisData = analysisResult;
+              dataSource = 'analysis_result';
+              debugPrint('✅ [ResultScreen] analysis_result에서 데이터 발견');
+            }
+          }
+
+          if (analysisData != null) {
+            // 원본 데이터 저장 (rom_data, motion_data 접근용)
+            _rawAnalysisData = analysisData;
+
+            // Context 정보 추출
+            _extractContextInfo(analysisData);
+
+            // EnhancedAnalysisResult 형식으로 파싱
+            try {
+              _biomechanicsResult = BiomechanicsResult.fromAnalysisResult(
+                analysisData,
+              );
+              debugPrint('✅ [ResultScreen] workout_logs.$dataSource에서 로드 완료');
+              debugPrint(
+                '   - jointStats: ${_biomechanicsResult!.jointStats?.length ?? 0}개',
+              );
+              debugPrint(
+                '   - muscleScores: ${_biomechanicsResult!.muscleScores?.length ?? 0}개',
+              );
+            } catch (e, stackTrace) {
+              debugPrint('⚠️ [ResultScreen] BiomechanicsResult 파싱 실패: $e');
+              debugPrint('   스택: $stackTrace');
+              _biomechanicsResult = null;
+            }
+          }
+
+          // 영상 URL 추출
+          final videoPath = workoutLog['video_path']?.toString();
           if (videoPath != null && videoPath.isNotEmpty) {
             // 🔧 video_path가 전체 URL인지 경로인지 확인
             if (videoPath.startsWith('http://') ||
@@ -236,59 +199,45 @@ class _ResultScreenState extends State<ResultScreen>
                   .getPublicUrl(videoPath);
             }
           }
-        }
-      } else {
-        // 백엔드 데이터가 없으면 null로 설정 (레거시 Fallback 없음)
-        _biomechanicsResult = null;
-        _rawAnalysisData = null;
-        debugPrint(
-          '⚠️ [ResultScreen] workout_logs에서 분석 결과를 찾을 수 없음 (ai_analysis_result, analysis_result 모두 null)',
-        );
 
-        // workout_logs 테이블에서 영상 경로 조회
-        final videoResponse = await SupabaseService.instance.client
-            .from('workout_logs')
-            .select('video_path')
-            .eq('id', widget.videoId)
-            .maybeSingle();
+          // exercise_name 추출
+          _exerciseNameFromDb = workoutLog['exercise_name']?.toString();
 
-        if (videoResponse != null) {
-          final videoPath = videoResponse['video_path']?.toString();
-          if (videoPath != null) {
-            // 🔧 video_path가 전체 URL인지 경로인지 확인
-            if (videoPath.startsWith('http://') ||
-                videoPath.startsWith('https://')) {
-              // 이미 전체 URL이면 그대로 사용
-              _videoUrl = videoPath;
-            } else {
-              // 경로만 있으면 Public URL로 변환
-              _videoUrl = SupabaseService.instance.client.storage
-                  .from('videos')
-                  .getPublicUrl(videoPath);
-            }
+          // 비디오 플레이어 초기화
+          if (_videoUrl != null) {
+            _videoController = VideoPlayerController.networkUrl(
+              Uri.parse(_videoUrl!),
+            );
+            await _videoController!.initialize();
           }
+
+          // 성공 시 루프 종료
+          break;
+        } else {
+          throw Exception('데이터가 null입니다.');
+        }
+      } catch (e) {
+        retryCount++;
+        debugPrint(
+          '⚠️ [ResultScreen] DB 조회 실패 (시도 $retryCount/$maxRetries): $e',
+        );
+
+        if (retryCount < maxRetries) {
+          // 재시도 전 대기
+          await Future.delayed(retryDelay);
+        } else {
+          // 최대 재시도 횟수 초과
+          setState(() {
+            _errorMessage = '데이터를 불러오는데 실패했습니다.';
+          });
+        }
+      } finally {
+        if (retryCount >= maxRetries || _biomechanicsResult != null) {
+          setState(() {
+            _isLoading = false;
+          });
         }
       }
-
-      // 비디오 플레이어 초기화
-      if (_videoUrl != null) {
-        _videoController = VideoPlayerController.networkUrl(
-          Uri.parse(_videoUrl!),
-        );
-        await _videoController!.initialize();
-      }
-
-      debugPrint('🟢 [ResultScreen] 분석 결과 로드 완료');
-      setState(() {
-        _isLoading = false;
-      });
-    } catch (e, stackTrace) {
-      debugPrint('🔴 분석 결과 로드 실패: $e');
-      debugPrint('🔴 스택 트레이스: $stackTrace');
-      setState(() {
-        _errorMessage = '결과 로드 실패: $e';
-        _isLoading = false;
-      });
     }
   }
 
@@ -995,9 +944,11 @@ class _ResultScreenState extends State<ResultScreen>
 
     // analysis_result에서 muscle_usage 확인
     if (_workoutLogResponse != null) {
-      final analysisResult = _workoutLogResponse!['analysis_result'] as Map<String, dynamic>?;
+      final analysisResult =
+          _workoutLogResponse!['analysis_result'] as Map<String, dynamic>?;
       if (analysisResult != null) {
-        final muscleUsage = analysisResult['muscle_usage'] as Map<String, dynamic>?;
+        final muscleUsage =
+            analysisResult['muscle_usage'] as Map<String, dynamic>?;
         if (muscleUsage != null) {
           final score = muscleUsage[muscleKey];
           if (score != null && score is num && score > 0) {
@@ -1009,7 +960,6 @@ class _ResultScreenState extends State<ResultScreen>
 
     return null;
   }
-
 
   /// 점수에 따른 색상 반환 (80↑ 초록, 50↑ 노랑, 그 외 회색)
   Color _getScoreColor(double score) {
@@ -1174,10 +1124,14 @@ class _ResultScreenState extends State<ResultScreen>
           final jointName = entry.key; // 🔧 원본 키 (예: left_hip, hip_L 등)
           final jointStat = entry.value;
           // [주석 추가] jointStat.romDegrees 변수는 실제로는 기여도(%) 값이 들어있음
-          final contributionPercent = jointStat.romDegrees; // 변수명은 유지하되 의미는 %로 변경
+          final contributionPercent =
+              jointStat.romDegrees; // 변수명은 유지하되 의미는 %로 변경
 
           // Progress 계산: 0~100% 범위로 정규화 (기존 0~180도 대신)
-          final contributionProgress = (contributionPercent / 100.0).clamp(0.0, 1.0);
+          final contributionProgress = (contributionPercent / 100.0).clamp(
+            0.0,
+            1.0,
+          );
 
           // [UX 강화] 동적 색상 결정 (기여도에 따라 색상 농도 변경)
           Color getContributionColor(double percent) {

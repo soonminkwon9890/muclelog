@@ -550,8 +550,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final exerciseName = log['exercise_name']?.toString() ?? '운동';
     final status = log['status']?.toString() ?? 'UNKNOWN';
     final createdAt = log['created_at']?.toString() ?? '';
-    // 🔧 video_path를 통해 videos.id (UUID) 찾기
-    final videoPath = log['video_path']?.toString();
 
     // analysis_result JSONB에서 점수 추출
     final analysisResult = log['analysis_result'] as Map<String, dynamic>?;
@@ -646,26 +644,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             if (status == 'COMPLETED')
               IconButton(
                 icon: const Icon(Icons.chevron_right),
-                onPressed: () async {
-                  // 🔧 videoId (UUID) 찾기
-                  String? videoId;
-                  if (videoPath != null) {
-                    final videoResponse = await SupabaseService.instance.client
-                        .from('workout_logs')
-                        .select('id')
-                        .ilike('video_path', '%$videoPath%')
-                        .maybeSingle();
-                    videoId = videoResponse?['id']?.toString();
-                  }
-
-                  if (videoId != null && mounted) {
+                onPressed: () {
+                  if (mounted) {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (context) => ResultScreen(
-                          videoId: videoId!,
-                          logId: logId,
-                          // exerciseName 파라미터 제거 - DB에서 자동으로 불러옴
-                        ),
+                        builder: (context) => ResultScreen(logId: logId),
                       ),
                     );
                   }
@@ -677,28 +660,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         onTap: _isSelectionMode
             ? () => _toggleSelection(logIdStr, !isSelected)
             : (status == 'COMPLETED'
-                  ? () async {
-                      // 🔧 videoId (UUID) 찾기
-                      String? videoId;
-                      if (videoPath != null) {
-                        final videoResponse = await SupabaseService
-                            .instance
-                            .client
-                            .from('workout_logs')
-                            .select('id')
-                            .ilike('video_path', '%$videoPath%')
-                            .maybeSingle();
-                        videoId = videoResponse?['id']?.toString();
-                      }
-
-                      if (videoId != null && mounted) {
+                  ? () {
+                      if (mounted) {
                         Navigator.of(context).push(
                           MaterialPageRoute(
-                            builder: (context) => ResultScreen(
-                              videoId: videoId!,
-                              logId: logId,
-                              // exerciseName 파라미터 제거 - DB에서 자동으로 불러옴
-                            ),
+                            builder: (context) => ResultScreen(logId: logId),
                           ),
                         );
                       }

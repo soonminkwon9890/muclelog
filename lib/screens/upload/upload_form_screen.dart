@@ -165,11 +165,7 @@ class _UploadFormScreenState extends State<UploadFormScreen> {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (context) => ResultScreen(
-              videoId: videoId, // workout_logs.id (UUID String) - 필수
               logId: finalLogId, // workout_logs.id (UUID String) - DB 조회용
-              // 🔧 exerciseName 파라미터 전달 안 함 - ResultScreen이 DB에서 자동으로 불러옴
-              // 🔧 로컬 객체 전달 안 함 - ID만 전달하여 DB에서 최신 데이터를 강제로 조회
-              // 🔧 원칙: 모든 데이터는 DB에서 로드하여 업로드 직후와 재접속 시 일관성 보장
             ),
           ),
         );

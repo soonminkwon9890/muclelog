@@ -120,6 +120,59 @@ class MuscleMetricUtils {
   }
 
   // =======================================================
+  // [Step 1.5] Joint-by-Joint 수치 보정 계수 계산
+  // =======================================================
+  // 이웃 관절의 가동성 데이터를 기반으로 0.5 ~ 1.2 사이의 가중치를 반환 (순수 수치 계산)
+  static Map<String, double> _calculateJBJFactors(
+    Map<String, double> jointDeltas,
+    String targetArea, // 'UPPER', 'LOWER', 'FULL'
+  ) {
+    final factors = <String, double>{};
+    bool calcUpper = targetArea == 'UPPER' || targetArea == 'FULL';
+    bool calcLower = targetArea == 'LOWER' || targetArea == 'FULL';
+
+    // 1. Spine JBJ (Core는 항상 계산)
+    // 인접 관절: Hip + Shoulder
+    double avgHip =
+        ((jointDeltas['leftHip'] ?? 0) + (jointDeltas['rightHip'] ?? 0)) / 2.0;
+    double avgShoulder =
+        ((jointDeltas['leftShoulder'] ?? 0) +
+            (jointDeltas['rightShoulder'] ?? 0)) /
+        2.0;
+
+    // 이웃 관절 평균 40도 기준. (40도 이상 움직이면 1.0 넘음, 최대 1.5배)
+    double spineNeighborMobility = (avgHip + avgShoulder) / 2.0;
+    factors['spine'] = (spineNeighborMobility / 40.0).clamp(0.8, 1.5);
+
+    // 2. Knee JBJ (하체 로직)
+    // 인접 관절: Hip + Ankle
+    if (calcLower) {
+      double leftHip = jointDeltas['leftHip'] ?? 0.0;
+      double leftAnkle = jointDeltas['leftAnkle'] ?? 0.0;
+      double leftKneeMobility = (leftHip + leftAnkle * 2.0) / 2.0; // 발목 가중치 2배
+      factors['leftKnee'] = (leftKneeMobility / 60.0).clamp(0.5, 1.2);
+
+      double rightHip = jointDeltas['rightHip'] ?? 0.0;
+      double rightAnkle = jointDeltas['rightAnkle'] ?? 0.0;
+      double rightKneeMobility = (rightHip + rightAnkle * 2.0) / 2.0;
+      factors['rightKnee'] = (rightKneeMobility / 60.0).clamp(0.5, 1.2);
+    }
+
+    // 3. Elbow JBJ (상체 로직)
+    // 인접 관절: Only Shoulder (손목 제외 - 현실적 운동 패턴 반영)
+    if (calcUpper) {
+      double leftShoulder = jointDeltas['leftShoulder'] ?? 0.0;
+      // 어깨 가동성만으로 팔꿈치 부하 평가 (기준 50.0)
+      factors['leftElbow'] = (leftShoulder / 50.0).clamp(0.5, 1.2);
+
+      double rightShoulder = jointDeltas['rightShoulder'] ?? 0.0;
+      factors['rightElbow'] = (rightShoulder / 50.0).clamp(0.5, 1.2);
+    }
+
+    return factors;
+  }
+
+  // =======================================================
   // [Step 2] 6대 핵심 요소 품질 평가 (Quality)
   // =======================================================
   static double _evaluateMovementQuality(
@@ -302,25 +355,163 @@ class MuscleMetricUtils {
     required String motionType,
     required String targetArea,
   }) {
+    // [측면 촬영 보정] 가시성 불균형 감지 및 미러링
+    Map<String, double> adjustedJointDeltas = Map.from(jointDeltas);
+    Map<String, double> adjustedVisibilityMap = Map.from(visibilityMap);
+    Map<String, double> adjustedJointVariances = Map.from(jointVariances);
+    Map<String, double> adjustedJointVelocities = Map.from(jointVelocities);
+
+    // 왼쪽/오른쪽 관절 가시성 평균 계산
+    double leftVisibilityAvg = 0.0;
+    double rightVisibilityAvg = 0.0;
+    int leftCount = 0;
+    int rightCount = 0;
+
+    visibilityMap.forEach((key, value) {
+      if (key.toLowerCase().contains('left')) {
+        leftVisibilityAvg += value;
+        leftCount++;
+      } else if (key.toLowerCase().contains('right')) {
+        rightVisibilityAvg += value;
+        rightCount++;
+      }
+    });
+
+    if (leftCount > 0) leftVisibilityAvg /= leftCount;
+    if (rightCount > 0) rightVisibilityAvg /= rightCount;
+
+    // 가시성 차이가 0.3(30%) 이상이면 측면 촬영으로 판단
+    double visibilityDiff = (leftVisibilityAvg - rightVisibilityAvg).abs();
+    bool isSideView = visibilityDiff >= 0.3;
+
+    if (isSideView) {
+      // 잘 보이는 쪽 결정
+      bool leftSideVisible = leftVisibilityAvg > rightVisibilityAvg;
+
+      // 안 보이는 쪽에 잘 보이는 쪽 데이터 미러링
+      if (leftSideVisible) {
+        // 왼쪽 → 오른쪽 미러링
+        adjustedJointDeltas['rightHip'] = adjustedJointDeltas['leftHip'] ?? 0.0;
+        adjustedJointDeltas['rightKnee'] =
+            adjustedJointDeltas['leftKnee'] ?? 0.0;
+        adjustedJointDeltas['rightAnkle'] =
+            adjustedJointDeltas['leftAnkle'] ?? 0.0;
+        adjustedJointDeltas['rightShoulder'] =
+            adjustedJointDeltas['leftShoulder'] ?? 0.0;
+        adjustedJointDeltas['rightElbow'] =
+            adjustedJointDeltas['leftElbow'] ?? 0.0;
+
+        adjustedVisibilityMap['rightHip'] =
+            adjustedVisibilityMap['leftHip'] ?? 0.0;
+        adjustedVisibilityMap['rightKnee'] =
+            adjustedVisibilityMap['leftKnee'] ?? 0.0;
+        adjustedVisibilityMap['rightAnkle'] =
+            adjustedVisibilityMap['leftAnkle'] ?? 0.0;
+        adjustedVisibilityMap['rightShoulder'] =
+            adjustedVisibilityMap['leftShoulder'] ?? 0.0;
+        adjustedVisibilityMap['rightElbow'] =
+            adjustedVisibilityMap['leftElbow'] ?? 0.0;
+
+        adjustedJointVariances['rightHip'] =
+            adjustedJointVariances['leftHip'] ?? 0.0;
+        adjustedJointVariances['rightKnee'] =
+            adjustedJointVariances['leftKnee'] ?? 0.0;
+        adjustedJointVariances['rightAnkle'] =
+            adjustedJointVariances['leftAnkle'] ?? 0.0;
+        adjustedJointVariances['rightShoulder'] =
+            adjustedJointVariances['leftShoulder'] ?? 0.0;
+        adjustedJointVariances['rightElbow'] =
+            adjustedJointVariances['leftElbow'] ?? 0.0;
+
+        adjustedJointVelocities['rightHip'] =
+            adjustedJointVelocities['leftHip'] ?? 0.0;
+        adjustedJointVelocities['rightKnee'] =
+            adjustedJointVelocities['leftKnee'] ?? 0.0;
+        adjustedJointVelocities['rightAnkle'] =
+            adjustedJointVelocities['leftAnkle'] ?? 0.0;
+        adjustedJointVelocities['rightShoulder'] =
+            adjustedJointVelocities['leftShoulder'] ?? 0.0;
+        adjustedJointVelocities['rightElbow'] =
+            adjustedJointVelocities['leftElbow'] ?? 0.0;
+      } else {
+        // 오른쪽 → 왼쪽 미러링
+        adjustedJointDeltas['leftHip'] = adjustedJointDeltas['rightHip'] ?? 0.0;
+        adjustedJointDeltas['leftKnee'] =
+            adjustedJointDeltas['rightKnee'] ?? 0.0;
+        adjustedJointDeltas['leftAnkle'] =
+            adjustedJointDeltas['rightAnkle'] ?? 0.0;
+        adjustedJointDeltas['leftShoulder'] =
+            adjustedJointDeltas['rightShoulder'] ?? 0.0;
+        adjustedJointDeltas['leftElbow'] =
+            adjustedJointDeltas['rightElbow'] ?? 0.0;
+
+        adjustedVisibilityMap['leftHip'] =
+            adjustedVisibilityMap['rightHip'] ?? 0.0;
+        adjustedVisibilityMap['leftKnee'] =
+            adjustedVisibilityMap['rightKnee'] ?? 0.0;
+        adjustedVisibilityMap['leftAnkle'] =
+            adjustedVisibilityMap['rightAnkle'] ?? 0.0;
+        adjustedVisibilityMap['leftShoulder'] =
+            adjustedVisibilityMap['rightShoulder'] ?? 0.0;
+        adjustedVisibilityMap['leftElbow'] =
+            adjustedVisibilityMap['rightElbow'] ?? 0.0;
+
+        adjustedJointVariances['leftHip'] =
+            adjustedJointVariances['rightHip'] ?? 0.0;
+        adjustedJointVariances['leftKnee'] =
+            adjustedJointVariances['rightKnee'] ?? 0.0;
+        adjustedJointVariances['leftAnkle'] =
+            adjustedJointVariances['rightAnkle'] ?? 0.0;
+        adjustedJointVariances['leftShoulder'] =
+            adjustedJointVariances['rightShoulder'] ?? 0.0;
+        adjustedJointVariances['leftElbow'] =
+            adjustedJointVariances['rightElbow'] ?? 0.0;
+
+        adjustedJointVelocities['leftHip'] =
+            adjustedJointVelocities['rightHip'] ?? 0.0;
+        adjustedJointVelocities['leftKnee'] =
+            adjustedJointVelocities['rightKnee'] ?? 0.0;
+        adjustedJointVelocities['leftAnkle'] =
+            adjustedJointVelocities['rightAnkle'] ?? 0.0;
+        adjustedJointVelocities['leftShoulder'] =
+            adjustedJointVelocities['rightShoulder'] ?? 0.0;
+        adjustedJointVelocities['leftElbow'] =
+            adjustedJointVelocities['rightElbow'] ?? 0.0;
+      }
+    }
+
     // 1. 관절 기여도 계산 (Quantity)
     final contributions = _calculateJointContribution(
-      jointDeltas,
-      visibilityMap,
+      adjustedJointDeltas, // 미러링된 데이터 사용
+      adjustedVisibilityMap, // 미러링된 데이터 사용
       targetArea,
     );
 
-    // 2. 관절별 품질 평가 (Quality)
+    // [New] JBJ 수치 보정 계수 계산 (텍스트 없음, 오직 숫자)
+    final jbjFactors = _calculateJBJFactors(
+      adjustedJointDeltas, // 미러링된 데이터 사용
+      targetArea.toUpperCase(),
+    );
+
+    // 2. 관절별 품질 평가 (JBJ 수치 적용)
     final qualities = <String, double>{};
-    for (final key in jointDeltas.keys) {
-      double quality = _evaluateMovementQuality(
+    for (final key in adjustedJointDeltas.keys) {
+      // 미러링된 데이터 사용
+      // 기본 품질 점수 계산
+      double baseQuality = _evaluateMovementQuality(
         key,
-        jointDeltas[key] ?? 0.0,
-        jointVariances[key] ?? 0.0,
-        jointVelocities[key] ?? 0.0,
+        adjustedJointDeltas[key] ?? 0.0, // 미러링된 데이터 사용
+        adjustedJointVariances[key] ?? 0.0, // 미러링된 데이터 사용
+        adjustedJointVelocities[key] ?? 0.0, // 미러링된 데이터 사용
         duration,
         motionType.toUpperCase(),
       );
-      qualities[key] = quality;
+
+      // JBJ Factor 곱하기 (단순 수치 보정)
+      // 이웃 관절이 잘 움직였으면 점수 UP, 아니면 DOWN
+      double jbjMultiplier = jbjFactors[key] ?? 1.0;
+
+      qualities[key] = (baseQuality * jbjMultiplier).clamp(0.0, 100.0);
     }
 
     // 3. 근육 점수 매핑 (Mapping)

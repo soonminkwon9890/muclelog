@@ -34,7 +34,6 @@ class _LoadingScreenState extends State<LoadingScreen> {
           .then((status) {
             if (status == 'COMPLETED') {
               // 분석 완료 - 결과 화면으로 이동
-              // 🔧 logId를 통해 videoId (UUID) 찾기
               if (mounted) {
                 _navigateToResult();
               }
@@ -80,46 +79,14 @@ class _LoadingScreenState extends State<LoadingScreen> {
     }
   }
 
-  /// 결과 화면으로 이동 (videoId 찾기)
-  Future<void> _navigateToResult() async {
-    try {
-      // workout_logs에서 video_path 가져오기
-      final logResponse = await SupabaseService.instance.client
-          .from('workout_logs')
-          .select('video_path')
-          .eq('id', widget.logId)
-          .maybeSingle();
-
-      final videoPath = logResponse?['video_path']?.toString();
-      if (videoPath == null) {
-        debugPrint('⚠️ [LoadingScreen] video_path를 찾을 수 없음');
-        return;
-      }
-
-      // video_path로 workout_logs 테이블에서 UUID 찾기
-      final videoResponse = await SupabaseService.instance.client
-          .from('workout_logs')
-          .select('id')
-          .ilike('video_path', '%$videoPath%')
-          .maybeSingle();
-
-      final videoId = videoResponse?['id']?.toString();
-      if (videoId != null && mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => ResultScreen(
-              videoId: videoId,
-              logId: widget.logId,
-              // exerciseName 파라미터 제거 - DB에서 자동으로 불러옴
-            ),
-          ),
-        );
-      } else {
-        debugPrint('⚠️ [LoadingScreen] videoId를 찾을 수 없음');
-      }
-    } catch (e, stackTrace) {
-      debugPrint('🔴 [LoadingScreen] 결과 화면 이동 실패: $e');
-      debugPrint('🔴 스택 트레이스: $stackTrace');
+  /// 결과 화면으로 이동
+  void _navigateToResult() {
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => ResultScreen(logId: widget.logId),
+        ),
+      );
     }
   }
 
