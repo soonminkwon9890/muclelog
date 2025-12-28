@@ -972,85 +972,6 @@ class _ResultScreenState extends State<ResultScreen>
     }
   }
 
-  /// 관절 키의 정렬 우선순위 반환 (신체 부위별 -> 좌우 순서)
-  /// [jointKey] 관절 키 (예: 'left_shoulder', 'hip_L', 'spine' 등)
-  /// 반환: 정렬 우선순위 (낮을수록 먼저 표시)
-  int _getJointSortPriority(String jointKey) {
-    final lowerKey = jointKey.toLowerCase();
-
-    // 1. 목 (Neck/Head)
-    if (lowerKey.contains('neck') || lowerKey.contains('head')) {
-      return 1;
-    }
-
-    // 2. 어깨 (Shoulder) - 왼쪽, 오른쪽 순
-    if (lowerKey.contains('shoulder')) {
-      if (lowerKey.contains('left') || lowerKey.endsWith('_l')) {
-        return 2; // 왼쪽 어깨
-      } else if (lowerKey.contains('right') || lowerKey.endsWith('_r')) {
-        return 3; // 오른쪽 어깨
-      }
-      return 2; // 기본값 (왼쪽 우선)
-    }
-
-    // 3. 팔꿈치 (Elbow) - 왼쪽, 오른쪽 순
-    if (lowerKey.contains('elbow')) {
-      if (lowerKey.contains('left') || lowerKey.endsWith('_l')) {
-        return 4; // 왼쪽 팔꿈치
-      } else if (lowerKey.contains('right') || lowerKey.endsWith('_r')) {
-        return 5; // 오른쪽 팔꿈치
-      }
-      return 4; // 기본값 (왼쪽 우선)
-    }
-
-    // 4. 손목 (Wrist) - 왼쪽, 오른쪽 순
-    if (lowerKey.contains('wrist')) {
-      if (lowerKey.contains('left') || lowerKey.endsWith('_l')) {
-        return 6; // 왼쪽 손목
-      } else if (lowerKey.contains('right') || lowerKey.endsWith('_r')) {
-        return 7; // 오른쪽 손목
-      }
-      return 6; // 기본값 (왼쪽 우선)
-    }
-
-    // 5. 척추/코어 (Spine)
-    if (lowerKey.contains('spine') || lowerKey.contains('core')) {
-      return 8;
-    }
-
-    // 6. 고관절 (Hip) - 왼쪽, 오른쪽 순
-    if (lowerKey.contains('hip')) {
-      if (lowerKey.contains('left') || lowerKey.endsWith('_l')) {
-        return 9; // 왼쪽 고관절
-      } else if (lowerKey.contains('right') || lowerKey.endsWith('_r')) {
-        return 10; // 오른쪽 고관절
-      }
-      return 9; // 기본값 (왼쪽 우선)
-    }
-
-    // 7. 무릎 (Knee) - 왼쪽, 오른쪽 순
-    if (lowerKey.contains('knee')) {
-      if (lowerKey.contains('left') || lowerKey.endsWith('_l')) {
-        return 11; // 왼쪽 무릎
-      } else if (lowerKey.contains('right') || lowerKey.endsWith('_r')) {
-        return 12; // 오른쪽 무릎
-      }
-      return 11; // 기본값 (왼쪽 우선)
-    }
-
-    // 8. 발목 (Ankle) - 왼쪽, 오른쪽 순
-    if (lowerKey.contains('ankle')) {
-      if (lowerKey.contains('left') || lowerKey.endsWith('_l')) {
-        return 13; // 왼쪽 발목
-      } else if (lowerKey.contains('right') || lowerKey.endsWith('_r')) {
-        return 14; // 오른쪽 발목
-      }
-      return 13; // 기본값 (왼쪽 우선)
-    }
-
-    // 기타 관절은 마지막에 배치
-    return 999;
-  }
 
   /// 관절 탭 UI (ROM 시각화, 데이터 필터링)
   Widget _buildJointTab() {
@@ -1100,18 +1021,9 @@ class _ResultScreenState extends State<ResultScreen>
       );
     }
 
-    // 🔧 정렬: 신체 부위별 -> 좌우 순서 (영어 키값 기준)
+    // 🔧 정렬: romDegrees 기준 내림차순 (주동 관절이 100%로 맨 위에 표시)
     final sorted = jointData.entries.toList()
-      ..sort((a, b) {
-        // 1순위: 신체 부위별, 좌우 순서
-        final priorityA = _getJointSortPriority(a.key);
-        final priorityB = _getJointSortPriority(b.key);
-        if (priorityA != priorityB) {
-          return priorityA.compareTo(priorityB);
-        }
-        // 2순위: 같은 부위 내에서는 contributionScore 내림차순
-        return b.value.contributionScore.compareTo(a.value.contributionScore);
-      });
+      ..sort((a, b) => b.value.romDegrees.compareTo(a.value.romDegrees));
 
     return Container(
       color: Colors.white,

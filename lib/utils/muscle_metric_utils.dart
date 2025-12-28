@@ -220,6 +220,103 @@ class MuscleMetricUtils {
   }
 
   // =======================================================
+  // [Step 1.5] 복합 관절 시너지 계산 (Compound Synergy)
+  // =======================================================
+  static Map<String, double> _calculateCompoundSynergy(
+    Map<String, double> jointDeltas,
+    String targetArea,
+    double rhythmScore, // 1.0에 가까울수록 견갑 안정화 (앵커링 잘됨)
+    Map<String, double> jbjFactors, // JBJ 기반 관절 협응도
+    Map<String, double> jointVariances, // 허리 떨림 확인용
+  ) {
+    final synergy = <String, double>{};
+    bool isUpper = targetArea == 'UPPER' || targetArea == 'FULL';
+    bool isLower = targetArea == 'LOWER' || targetArea == 'FULL';
+
+    // 1. 상체 시너지 (Push/Pull) - 앵커링 효과 적용
+    if (isUpper) {
+      // 왼쪽
+      double lShoulder = jointDeltas['leftShoulder'] ?? 0.0;
+      double lElbow = jointDeltas['leftElbow'] ?? 0.0;
+
+      // 복합 움직임 감지 (둘 다 30도 이상)
+      if (lShoulder > 30 && lElbow > 30) {
+        // 기본 파워: 관절 움직임의 합
+        double rawPower = (lShoulder + lElbow) / 100.0;
+
+        // [앵커링 로직]
+        // RhythmScore(0~1)가 높으면(목이 길면) -> 대흉근/광배근 시너지 상승 (최대 1.5배)
+        // RhythmScore가 낮으면(으쓱하면) -> 어깨/승모근 개입, 대흉근 시너지 감소
+        double anchorFactor = (0.5 + rhythmScore).clamp(0.5, 1.5); // 0.5 ~ 1.5배
+
+        double currentPec = synergy['pecs_lats'] ?? 1.0;
+        double newPec = (rawPower * anchorFactor).clamp(1.0, 2.5);
+        synergy['pecs_lats'] = (currentPec + newPec) / 2.0; // 평균 적용
+        synergy['delts_traps'] = rawPower.clamp(1.0, 1.2); // 보조근은 소폭 상승
+      }
+
+      // 오른쪽 (동일 로직 적용)
+      double rShoulder = jointDeltas['rightShoulder'] ?? 0.0;
+      double rElbow = jointDeltas['rightElbow'] ?? 0.0;
+      if (rShoulder > 30 && rElbow > 30) {
+        double rawPower = (rShoulder + rElbow) / 100.0;
+        double anchorFactor = (0.5 + rhythmScore).clamp(0.5, 1.5);
+
+        double currentPec = synergy['pecs_lats'] ?? 1.0;
+        double newPec = (rawPower * anchorFactor).clamp(1.0, 2.5);
+        synergy['pecs_lats'] = (currentPec + newPec) / 2.0; // 평균 적용
+      }
+
+      // [New] 승모근 보상 계수 (Compensation Factor)
+      // rhythmScore가 낮으면(으쓱하면) -> 승모근 보상 작용 발생
+      if (rhythmScore >= 0.7) {
+        synergy['traps_comp'] = 1.0; // 자세 좋음, 보상 없음
+      } else {
+        // rhythmScore가 낮을수록 높은 값
+        // 예: rhythmScore = 0.3 -> traps_comp = 1.0 + (0.7 * 1.5) = 2.05 -> clamp(1.2, 1.5) = 1.5
+        double compensation = 1.0 + ((1.0 - rhythmScore) * 1.5);
+        synergy['traps_comp'] = compensation.clamp(1.2, 1.5);
+      }
+    }
+
+    // 2. 하체 시너지 (Squat/Lunge) - JBJ & Spine 안정성 적용
+    if (isLower) {
+      // [JBJ 로직 반영] 둔근은 고관절(Hip)과 발목(Ankle)이 잘 움직일 때 활성화됨
+      // 무릎(Knee)만 많이 쓰면 둔근 개입 적음
+
+      double avgHip =
+          ((jointDeltas['leftHip'] ?? 0) + (jointDeltas['rightHip'] ?? 0)) /
+          2.0;
+      double avgAnkle =
+          ((jointDeltas['leftAnkle'] ?? 0) + (jointDeltas['rightAnkle'] ?? 0)) /
+          2.0;
+
+      // 고관절과 발목이 충분히 움직였는가?
+      if (avgHip > 40 && avgAnkle > 10) {
+        double jbjScore = (avgHip + avgAnkle * 2.0) / 100.0; // 발목 가중치 2배
+
+        // [허리 안정성 페널티]
+        // 허리가 흔들리면(분산 > 10) 둔근 힘 누수 발생
+        double spineVar = jointVariances['spine'] ?? 0.0;
+        double corePenalty = spineVar > 10.0 ? 0.7 : 1.0; // 불안정하면 30% 감소
+
+        synergy['glutes'] = (jbjScore * corePenalty).clamp(
+          1.0,
+          2.2,
+        ); // 둔근 최대 2.2배 가산
+      }
+    }
+
+    // 기본값 설정 (시너지가 없을 경우 1.0)
+    synergy.putIfAbsent('pecs_lats', () => 1.0);
+    synergy.putIfAbsent('delts_traps', () => 1.0);
+    synergy.putIfAbsent('traps_comp', () => 1.0);
+    synergy.putIfAbsent('glutes', () => 1.0);
+
+    return synergy;
+  }
+
+  // =======================================================
   // [Step 3] 근육 매핑 및 요추 안정성 평가 (Mapping)
   // =======================================================
   static Map<String, double> _mapToMuscles(
@@ -230,6 +327,7 @@ class MuscleMetricUtils {
     String targetArea, // 'UPPER', 'LOWER', 'FULL'
     Map<String, double> jointDeltas, // 요추 ROM 확인용
     Map<String, double> jointVariances, // 요추 떨림 확인용
+    Map<String, double> synergy, // [New] 복합 관절 시너지 계수
   ) {
     final scores = <String, double>{};
 
@@ -255,8 +353,13 @@ class MuscleMetricUtils {
     // --- 하체 근육 ---
     scores['left_quadriceps'] = calc('leftKnee', lowerMultiplier);
     scores['right_quadriceps'] = calc('rightKnee', lowerMultiplier);
-    scores['left_glutes'] = calc('leftHip', lowerMultiplier);
-    scores['right_glutes'] = calc('rightHip', lowerMultiplier);
+
+    // 하체 시너지 계수 적용
+    double gluteSynergy = synergy['glutes'] ?? 1.0;
+    scores['left_glutes'] = (calc('leftHip', lowerMultiplier) * gluteSynergy)
+        .clamp(0.0, 100.0);
+    scores['right_glutes'] = (calc('rightHip', lowerMultiplier) * gluteSynergy)
+        .clamp(0.0, 100.0);
     scores['left_hamstrings'] =
         (calc('leftHip', lowerMultiplier) * 0.5 +
         calc('leftKnee', lowerMultiplier) * 0.5);
@@ -268,33 +371,35 @@ class MuscleMetricUtils {
     double shoulderLeftRaw = calc('leftShoulder', upperMultiplier);
     double shoulderRightRaw = calc('rightShoulder', upperMultiplier);
 
+    // 상체 시너지 계수 적용
+    double pecSynergy = synergy['pecs_lats'] ?? 1.0;
+    double deltSynergy = synergy['delts_traps'] ?? 1.0;
+    double trapsCompensation = synergy['traps_comp'] ?? 1.0; // [New] 승모근 보상 계수
+
+    // 승모근: 기존 trapFactor + 보상 계수 적용
     double trapFactor = (1.0 - rhythmScore).clamp(0.0, 1.0);
     scores['trapezius'] =
-        ((shoulderLeftRaw + shoulderRightRaw) * trapFactor * 1.5).clamp(
-          0.0,
-          100.0,
-        );
+        ((shoulderLeftRaw + shoulderRightRaw) *
+                trapFactor *
+                1.5 *
+                trapsCompensation)
+            .clamp(0.0, 100.0);
 
     double latsFactor = rhythmScore;
 
-    scores['left_latissimus'] = (shoulderLeftRaw * latsFactor).clamp(
+    scores['left_latissimus'] = (shoulderLeftRaw * latsFactor * pecSynergy)
+        .clamp(0.0, 100.0);
+    scores['right_latissimus'] = (shoulderRightRaw * latsFactor * pecSynergy)
+        .clamp(0.0, 100.0);
+    scores['left_pectorals'] = (shoulderLeftRaw * latsFactor * 0.9 * pecSynergy)
+        .clamp(0.0, 100.0);
+    scores['right_pectorals'] =
+        (shoulderRightRaw * latsFactor * 0.9 * pecSynergy).clamp(0.0, 100.0);
+    scores['left_deltoids'] = (shoulderLeftRaw * deltSynergy).clamp(0.0, 100.0);
+    scores['right_deltoids'] = (shoulderRightRaw * deltSynergy).clamp(
       0.0,
       100.0,
     );
-    scores['right_latissimus'] = (shoulderRightRaw * latsFactor).clamp(
-      0.0,
-      100.0,
-    );
-    scores['left_pectorals'] = (shoulderLeftRaw * latsFactor * 0.9).clamp(
-      0.0,
-      100.0,
-    );
-    scores['right_pectorals'] = (shoulderRightRaw * latsFactor * 0.9).clamp(
-      0.0,
-      100.0,
-    );
-    scores['left_deltoids'] = shoulderLeftRaw;
-    scores['right_deltoids'] = shoulderRightRaw;
 
     scores['left_biceps'] = calc('leftElbow', upperMultiplier);
     scores['right_biceps'] = calc('rightElbow', upperMultiplier);
@@ -514,6 +619,15 @@ class MuscleMetricUtils {
       qualities[key] = (baseQuality * jbjMultiplier).clamp(0.0, 100.0);
     }
 
+    // [Step 2.5] 복합 관절 시너지 계산
+    final synergy = _calculateCompoundSynergy(
+      adjustedJointDeltas, // 미러링된 데이터 사용
+      targetArea.toUpperCase(),
+      averageRhythmScore, // 앵커링 효과 확인용
+      jbjFactors, // JBJ 기반 협응도
+      adjustedJointVariances, // 허리 떨림 확인용
+    );
+
     // 3. 근육 점수 매핑 (Mapping)
     final muscleScores = _mapToMuscles(
       contributions,
@@ -521,8 +635,9 @@ class MuscleMetricUtils {
       averageRhythmScore,
       motionType.toUpperCase(),
       targetArea,
-      jointDeltas,
-      jointVariances,
+      adjustedJointDeltas, // 미러링된 데이터 사용
+      adjustedJointVariances, // 미러링된 데이터 사용
+      synergy, // [New] 복합 관절 시너지 계수
     );
 
     // 4. 정렬 (그룹핑 정렬 로직 적용)
@@ -570,13 +685,30 @@ class MuscleMetricUtils {
       }
     }
 
-    // [중요] 관절 데이터(rom_data)를 '기여도 %'로 교체하여 반환
-    // (내부 계산용 jointDeltas는 유지하고, 보여주기용 데이터만 변경)
+    // [수정] 관절 데이터(rom_data) 생성 로직
+    // 전략: 가장 많이 움직인 관절을 100% 기준으로 삼는 '상대적 강도' 방식
     final displayJointData = <String, double>{};
-    contributions.forEach((k, v) {
-      // 1% 미만은 0으로 처리 (노이즈 제거)
-      displayJointData[k] = (v * 100.0);
+
+    // 1. 최대 움직임 값 찾기 (Spine 제외)
+    double maxDelta = 0.0;
+    adjustedJointDeltas.forEach((k, v) {
+      if (k != 'spine' && v > maxDelta) maxDelta = v;
     });
+
+    // 2. 안전장치: 최대 움직임이 10도 미만이면 분석 결과 없음 (노이즈)
+    if (maxDelta >= 10.0) {
+      adjustedJointDeltas.forEach((k, v) {
+        if (k == 'spine') return; // 기립근은 관절 탭 제외
+
+        double relativeScore = (v / maxDelta * 100.0);
+
+        // 10% 미만은 주동 관절이 아니라고 판단하여 제외
+        if (relativeScore >= 10.0) {
+          displayJointData[k] = relativeScore;
+        }
+      });
+    }
+    // maxDelta < 10.0이면 displayJointData는 빈 맵으로 반환됨
 
     return {
       'detailed_muscle_usage': sanitizeOutputMap(
