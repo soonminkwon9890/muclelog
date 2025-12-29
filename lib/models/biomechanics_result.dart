@@ -130,6 +130,9 @@ class BiomechanicsResult {
   /// detected_faults: ["knee_valgus", "uncontrolled_tempo"] 등
   final List<String>? detectedFaults;
 
+  /// 엔진 버전 ('v2_biomechanics' 또는 null이면 'v1_legacy')
+  final String? engineVersion;
+
   BiomechanicsResult({
     required this.biomechPattern,
     required this.metadata,
@@ -139,6 +142,7 @@ class BiomechanicsResult {
     this.debugInfo,
     this.coreMetrics,
     this.detectedFaults,
+    this.engineVersion,
   });
 
   /// Fuzzy Matching으로 근육 점수 조회 (백엔드 데이터만 사용)
@@ -454,8 +458,16 @@ class BiomechanicsResult {
           analysisResult['biomech_pattern']?.toString() ??
           'UNKNOWN';
 
+      // 🔧 engine_version 파싱 (레거시 데이터 호환성)
+      final engineVersion =
+          data['engine_version']?.toString() ??
+          data['engineVersion']?.toString() ??
+          analysisResult['engine_version']?.toString();
+      // null이면 'v1_legacy'로 처리하지 않고 null 유지 (나중에 사용 시 처리)
+
       debugPrint('📊 [BiomechanicsResult] 파싱 완료:');
       debugPrint('   - biomechPattern: $biomechPattern');
+      debugPrint('   - engineVersion: ${engineVersion ?? "null (v1_legacy로 간주)"}');
       debugPrint(
         '   - kinematicAnalysis: ${kinematicAnalysis != null ? "있음" : "없음"}',
       );
@@ -472,6 +484,7 @@ class BiomechanicsResult {
         debugInfo: debugInfo,
         coreMetrics: coreMetrics,
         detectedFaults: detectedFaults,
+        engineVersion: engineVersion,
       );
     } catch (e, stack) {
       debugPrint('❌ [BiomechanicsResult] 파싱 중 치명적 오류 발생: $e');
@@ -486,6 +499,7 @@ class BiomechanicsResult {
         debugInfo: null,
         coreMetrics: null,
         detectedFaults: null,
+        engineVersion: null,
       );
     }
   }

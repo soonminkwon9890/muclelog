@@ -1,6 +1,114 @@
 import 'dart:math' as math;
+import 'biomechanics/point_3d.dart';
+import 'biomechanics/vector_utils.dart';
+import 'biomechanics/stability_calculator.dart';
+import 'biomechanics/motion_analyzer.dart';
+import 'biomechanics/energy_leak_engine.dart';
+import 'biomechanics/joint_controller.dart';
 
+/// 생체역학 분석 유틸리티 클래스 (Facade Pattern)
+/// 
+/// 새로운 순수 역학 기반 엔진 컴포넌트들을 조율하고,
+/// 결과를 기존 UI가 기대하는 형식으로 변환하는 역할을 수행합니다.
 class MuscleMetricUtils {
+  // =======================================================
+  // [Static Members] 정적 멤버
+  // =======================================================
+  
+  /// MotionAnalyzer 정적 인스턴스 (상태 유지)
+  /// Stateful 클래스이므로 정적 인스턴스를 사용하여 프레임 간 상태가 유지됩니다.
+  static final MotionAnalyzer _motionAnalyzer = MotionAnalyzer();
+  
+  /// 관절별 JointController 맵 (미리 정의)
+  static final Map<String, JointController> _jointControllers = {
+    // ✅ 어깨 관절 컨트롤러 추가 (orderedJoints 순서에 맞게 먼저 정의)
+    'left_shoulder': JointController.fromDegrees(
+      angleMinDegrees: 0,
+      angleMaxDegrees: 180, // 어깨 가동 범위 (0~180도)
+      stiffness: 20.0,
+      dampingCoefficient: 1.0,
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    'right_shoulder': JointController.fromDegrees(
+      angleMinDegrees: 0,
+      angleMaxDegrees: 180,
+      stiffness: 20.0,
+      dampingCoefficient: 1.0,
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    
+    // 기존 컨트롤러들...
+    'left_knee': JointController.fromDegrees(
+      angleMinDegrees: 0,
+      angleMaxDegrees: 135,
+      stiffness: 20.0, // 50.0 → 20.0 (인대 유연성 현실화)
+      dampingCoefficient: 1.0, // 5.0 → 1.0 (과도한 저항 제거)
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    'right_knee': JointController.fromDegrees(
+      angleMinDegrees: 0,
+      angleMaxDegrees: 135,
+      stiffness: 20.0, // 50.0 → 20.0 (인대 유연성 현실화)
+      dampingCoefficient: 1.0, // 5.0 → 1.0 (과도한 저항 제거)
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    'left_elbow': JointController.fromDegrees(
+      angleMinDegrees: 0,
+      angleMaxDegrees: 150,
+      stiffness: 15.0, // 부드러운 반응을 위한 낮은 Stiffness
+      dampingCoefficient: 1.0, // 5.0 → 1.0 (과도한 저항 제거)
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    'right_elbow': JointController.fromDegrees(
+      angleMinDegrees: 0,
+      angleMaxDegrees: 150,
+      stiffness: 15.0, // 부드러운 반응을 위한 낮은 Stiffness
+      dampingCoefficient: 1.0, // 5.0 → 1.0 (과도한 저항 제거)
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    'left_hip': JointController.fromDegrees(
+      angleMinDegrees: 0,
+      angleMaxDegrees: 120,
+      stiffness: 20.0, // 50.0 → 20.0 (인대 유연성 현실화)
+      dampingCoefficient: 1.0, // 5.0 → 1.0 (과도한 저항 제거)
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    'right_hip': JointController.fromDegrees(
+      angleMinDegrees: 0,
+      angleMaxDegrees: 120,
+      stiffness: 20.0, // 50.0 → 20.0 (인대 유연성 현실화)
+      dampingCoefficient: 1.0, // 5.0 → 1.0 (과도한 저항 제거)
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    'left_ankle': JointController.fromDegrees(
+      angleMinDegrees: -45, // 족배굴곡
+      angleMaxDegrees: 45,   // 족저굴곡
+      stiffness: 20.0,
+      dampingCoefficient: 1.0,
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+    'right_ankle': JointController.fromDegrees(
+      angleMinDegrees: -45, // 족배굴곡
+      angleMaxDegrees: 45,   // 족저굴곡
+      stiffness: 20.0,
+      dampingCoefficient: 1.0,
+      staticFriction: 0.1,
+      kineticFriction: 0.05,
+    ),
+  };
+  
+  /// 이전 각도 저장용 Map (JointController의 calculateJointStress 호출 시 사용)
+  static final Map<String, double> _previousAngles = {};
+
   // =======================================================
   // [Helper] 데이터 정제 및 포맷팅
   // =======================================================
@@ -19,728 +127,374 @@ class MuscleMetricUtils {
   }
 
   // =======================================================
-  // [Step 0] 상완골 리듬(Scapulohumeral Rhythm) 계산기
+  // [Helper] Stability Warning 변환
   // =======================================================
-  static double calculateInstantRhythm({
-    required double shoulderY,
-    required double earY,
-    required double elbowX,
-    required double elbowY,
-    required double shoulderX,
-  }) {
-    double neckLength = (shoulderY - earY).abs();
-    double armAngleRad = math.atan2(
-      (elbowY - shoulderY).abs(),
-      (elbowX - shoulderX).abs(),
-    );
-    double armAngleDeg = armAngleRad * (180 / math.pi);
-
-    // 목 길이가 확보될수록 점수가 높음 (1.0 = 좋음, 0.0 = 으쓱)
-    double rhythmScore = (neckLength / 100.0).clamp(0.0, 1.0);
-
-    // 팔을 내리고 있을 때는(30도 미만) 리듬 판단 무의미 -> 1.0 처리
-    if (armAngleDeg < 30) return 1.0;
-
-    return rhythmScore;
+  
+  /// StabilityMetrics 객체를 UI용 String 메시지로 변환
+  static String _convertStabilityMetricsToWarning(StabilityMetrics metrics) {
+    final warnings = <String>[];
+    
+    if (metrics.elevationFactor > 0.5) {
+      warnings.add("어깨가 으쓱했습니다");
+      }
+    if (metrics.valgusFactor > 0.3) {
+      warnings.add("무릎이 안쪽으로 쏠렸습니다");
+    }
+    if (metrics.retractionFactor < -0.05) {
+      warnings.add("라운드 숄더가 감지되었습니다");
+    }
+    if (metrics.pelvicTiltFactor > 0.2) {
+      warnings.add("골반 경사가 감지되었습니다");
+    }
+    
+    return warnings.isEmpty ? "" : warnings.join(". ");
   }
 
   // =======================================================
-  // [Step 1] 관절 기여도 통계 (Quantity) & Visibility 필터
-  // + 요추(Spine) 관절 추가
+  // [Helper] 빈 결과 반환
   // =======================================================
-  static Map<String, double> _calculateJointContribution(
-    Map<String, double> jointDeltas,
-    Map<String, double> visibilityMap,
-    String targetArea,
-  ) {
-    final contribution = <String, double>{};
-    double totalMovement = 0.0;
-
-    // 1. 노이즈 및 화면 밖 관절 제거
-    jointDeltas.forEach((key, value) {
-      double vis = visibilityMap[key] ?? 0.0;
-      // Deadzone(15도) & Visibility(0.5)
-      if (value.abs() > 15.0 && vis > 0.5) {
-        totalMovement += value.abs();
-      }
-    });
-
-    if (totalMovement == 0.0) return {};
-
-    // 2. 기여도 비율 계산
-    jointDeltas.forEach((key, value) {
-      double vis = visibilityMap[key] ?? 0.0;
-      if (value.abs() > 15.0 && vis > 0.5) {
-        contribution[key] = (value.abs() / totalMovement);
-      } else {
-        contribution[key] = 0.0;
-      }
-    });
-
-    // 3. 사용자 타겟에 따른 억제 로직
-    String target = targetArea.toUpperCase();
-    bool suppressUpper = target == 'LOWER';
-    bool suppressLower = target == 'UPPER';
-
-    if (target != 'LOWER' && target != 'UPPER') {
-      double lowerSum =
-          (contribution['leftHip'] ?? 0) +
-          (contribution['rightHip'] ?? 0) +
-          (contribution['leftKnee'] ?? 0) +
-          (contribution['rightKnee'] ?? 0);
-      double upperSum =
-          (contribution['leftShoulder'] ?? 0) +
-          (contribution['rightShoulder'] ?? 0) +
-          (contribution['leftElbow'] ?? 0) +
-          (contribution['rightElbow'] ?? 0);
-
-      if (lowerSum > upperSum * 1.5) {
-        suppressUpper = true;
-      } else if (upperSum > lowerSum * 1.5) {
-        suppressLower = true;
-      }
-    }
-
-    // 억제 적용 (요추(spine)는 보상작용 감지를 위해 억제하지 않고 남겨둠)
-    contribution.forEach((key, value) {
-      bool isLowerJoint =
-          key.toLowerCase().contains('knee') ||
-          key.toLowerCase().contains('hip') ||
-          key.toLowerCase().contains('ankle');
-      bool isSpine = key.toLowerCase().contains('spine');
-
-      if (!isSpine) {
-        // 요추 제외하고 억제 적용
-        if (suppressLower && isLowerJoint) contribution[key] = value * 0.1;
-        if (suppressUpper && !isLowerJoint) contribution[key] = value * 0.1;
-      }
-    });
-
-    return contribution;
+  
+  static Map<String, dynamic> _emptyResult() {
+    return {
+      'detailed_muscle_usage': <String, double>{},
+      'rom_data': <String, double>{},
+      'biomech_pattern': 'UNKNOWN',
+      'stability_warning': '',
+    };
   }
 
   // =======================================================
-  // [Step 1.5] Joint-by-Joint 수치 보정 계수 계산
+  // [Helper] 관절 각도 계산 (3점 각도)
   // =======================================================
-  // 이웃 관절의 가동성 데이터를 기반으로 0.5 ~ 1.2 사이의 가중치를 반환 (순수 수치 계산)
-  static Map<String, double> _calculateJBJFactors(
-    Map<String, double> jointDeltas,
-    String targetArea, // 'UPPER', 'LOWER', 'FULL'
+  
+  /// 세 점(a, b, c)으로 구성된 각도 계산 (라디안)
+  /// b가 꼭짓점, a와 c가 양쪽 끝점
+  static double _calculateAngle(
+    Point3D a,
+    Point3D b,
+    Point3D c,
   ) {
-    final factors = <String, double>{};
-    bool calcUpper = targetArea == 'UPPER' || targetArea == 'FULL';
-    bool calcLower = targetArea == 'LOWER' || targetArea == 'FULL';
-
-    // 1. Spine JBJ (Core는 항상 계산)
-    // 인접 관절: Hip + Shoulder
-    double avgHip =
-        ((jointDeltas['leftHip'] ?? 0) + (jointDeltas['rightHip'] ?? 0)) / 2.0;
-    double avgShoulder =
-        ((jointDeltas['leftShoulder'] ?? 0) +
-            (jointDeltas['rightShoulder'] ?? 0)) /
-        2.0;
-
-    // 이웃 관절 평균 40도 기준. (40도 이상 움직이면 1.0 넘음, 최대 1.5배)
-    double spineNeighborMobility = (avgHip + avgShoulder) / 2.0;
-    factors['spine'] = (spineNeighborMobility / 40.0).clamp(0.8, 1.5);
-
-    // 2. Knee JBJ (하체 로직)
-    // 인접 관절: Hip + Ankle
-    if (calcLower) {
-      double leftHip = jointDeltas['leftHip'] ?? 0.0;
-      double leftAnkle = jointDeltas['leftAnkle'] ?? 0.0;
-      double leftKneeMobility = (leftHip + leftAnkle * 2.0) / 2.0; // 발목 가중치 2배
-      factors['leftKnee'] = (leftKneeMobility / 60.0).clamp(0.5, 1.2);
-
-      double rightHip = jointDeltas['rightHip'] ?? 0.0;
-      double rightAnkle = jointDeltas['rightAnkle'] ?? 0.0;
-      double rightKneeMobility = (rightHip + rightAnkle * 2.0) / 2.0;
-      factors['rightKnee'] = (rightKneeMobility / 60.0).clamp(0.5, 1.2);
-    }
-
-    // 3. Elbow JBJ (상체 로직)
-    // 인접 관절: Only Shoulder (손목 제외 - 현실적 운동 패턴 반영)
-    if (calcUpper) {
-      double leftShoulder = jointDeltas['leftShoulder'] ?? 0.0;
-      // 어깨 가동성만으로 팔꿈치 부하 평가 (기준 50.0)
-      factors['leftElbow'] = (leftShoulder / 50.0).clamp(0.5, 1.2);
-
-      double rightShoulder = jointDeltas['rightShoulder'] ?? 0.0;
-      factors['rightElbow'] = (rightShoulder / 50.0).clamp(0.5, 1.2);
-    }
-
-    return factors;
-  }
-
-  // =======================================================
-  // [Step 2] 6대 핵심 요소 품질 평가 (Quality)
-  // =======================================================
-  static double _evaluateMovementQuality(
-    String jointKey,
-    double rom,
-    double variance,
-    double velocity,
-    double duration,
-    String motionType,
-  ) {
-    double score = 0.0;
-    bool isSpine = jointKey.toLowerCase().contains('spine');
-
-    // A. 등장성 운동 (Isotonic)
-    if (motionType == 'ISOTONIC') {
-      if (isSpine) {
-        // [요추 특수 로직] 등장성에서 움직임이 크면(>20) 보상작용 -> 낮은 점수 반환
-        return rom > 20.0 ? 20.0 : 100.0;
-      }
-
-      // 일반 관절
-      double romScore = (rom / 130.0 * 100).clamp(0.0, 100.0);
-      double velScore = (velocity / 50.0 * 100).clamp(0.0, 100.0);
-      double gravScore = rom > 15.0 ? 100.0 : 0.0;
-      score = (romScore * 0.5 + velScore * 0.3 + gravScore * 0.2);
-    }
-    // B. 등척성 운동 (Isometric)
-    else {
-      // 1. Stability (안정성)
-      double stabilityScore = ((10.0 - variance) * 10.0).clamp(0.0, 100.0);
-
-      // 2. TUT (Time Under Tension)
-      double tutScore = (duration / 30.0 * 100).clamp(0.0, 100.0);
-
-      // [요추 특수 로직]
-      if (isSpine && variance > 5.0) stabilityScore *= 0.2;
-
-      // [보상작용 필터]
-      if (rom > 20.0) stabilityScore *= 0.5;
-
-      score = (stabilityScore * 0.6 + tutScore * 0.4);
-    }
-
-    return score.clamp(0.0, 100.0);
-  }
-
-  // =======================================================
-  // [Step 1.5] 복합 관절 시너지 계산 (Compound Synergy)
-  // =======================================================
-  static Map<String, double> _calculateCompoundSynergy(
-    Map<String, double> jointDeltas,
-    String targetArea,
-    double rhythmScore, // 1.0에 가까울수록 견갑 안정화 (앵커링 잘됨)
-    Map<String, double> jbjFactors, // JBJ 기반 관절 협응도
-    Map<String, double> jointVariances, // 허리 떨림 확인용
-  ) {
-    final synergy = <String, double>{};
-    bool isUpper = targetArea == 'UPPER' || targetArea == 'FULL';
-    bool isLower = targetArea == 'LOWER' || targetArea == 'FULL';
-
-    // 1. 상체 시너지 (Push/Pull) - 앵커링 효과 적용
-    if (isUpper) {
-      // 왼쪽
-      double lShoulder = jointDeltas['leftShoulder'] ?? 0.0;
-      double lElbow = jointDeltas['leftElbow'] ?? 0.0;
-
-      // 복합 움직임 감지 (둘 다 30도 이상)
-      if (lShoulder > 30 && lElbow > 30) {
-        // 기본 파워: 관절 움직임의 합
-        double rawPower = (lShoulder + lElbow) / 100.0;
-
-        // [앵커링 로직]
-        // RhythmScore(0~1)가 높으면(목이 길면) -> 대흉근/광배근 시너지 상승 (최대 1.5배)
-        // RhythmScore가 낮으면(으쓱하면) -> 어깨/승모근 개입, 대흉근 시너지 감소
-        double anchorFactor = (0.5 + rhythmScore).clamp(0.5, 1.5); // 0.5 ~ 1.5배
-
-        double currentPec = synergy['pecs_lats'] ?? 1.0;
-        double newPec = (rawPower * anchorFactor).clamp(1.0, 2.5);
-        synergy['pecs_lats'] = (currentPec + newPec) / 2.0; // 평균 적용
-        synergy['delts_traps'] = rawPower.clamp(1.0, 1.2); // 보조근은 소폭 상승
-      }
-
-      // 오른쪽 (동일 로직 적용)
-      double rShoulder = jointDeltas['rightShoulder'] ?? 0.0;
-      double rElbow = jointDeltas['rightElbow'] ?? 0.0;
-      if (rShoulder > 30 && rElbow > 30) {
-        double rawPower = (rShoulder + rElbow) / 100.0;
-        double anchorFactor = (0.5 + rhythmScore).clamp(0.5, 1.5);
-
-        double currentPec = synergy['pecs_lats'] ?? 1.0;
-        double newPec = (rawPower * anchorFactor).clamp(1.0, 2.5);
-        synergy['pecs_lats'] = (currentPec + newPec) / 2.0; // 평균 적용
-      }
-
-      // [New] 승모근 보상 계수 (Compensation Factor)
-      // rhythmScore가 낮으면(으쓱하면) -> 승모근 보상 작용 발생
-      if (rhythmScore >= 0.7) {
-        synergy['traps_comp'] = 1.0; // 자세 좋음, 보상 없음
-      } else {
-        // rhythmScore가 낮을수록 높은 값
-        // 예: rhythmScore = 0.3 -> traps_comp = 1.0 + (0.7 * 1.5) = 2.05 -> clamp(1.2, 1.5) = 1.5
-        double compensation = 1.0 + ((1.0 - rhythmScore) * 1.5);
-        synergy['traps_comp'] = compensation.clamp(1.2, 1.5);
-      }
-    }
-
-    // 2. 하체 시너지 (Squat/Lunge) - JBJ & Spine 안정성 적용
-    if (isLower) {
-      // [JBJ 로직 반영] 둔근은 고관절(Hip)과 발목(Ankle)이 잘 움직일 때 활성화됨
-      // 무릎(Knee)만 많이 쓰면 둔근 개입 적음
-
-      double avgHip =
-          ((jointDeltas['leftHip'] ?? 0) + (jointDeltas['rightHip'] ?? 0)) /
-          2.0;
-      double avgAnkle =
-          ((jointDeltas['leftAnkle'] ?? 0) + (jointDeltas['rightAnkle'] ?? 0)) /
-          2.0;
-
-      // 고관절과 발목이 충분히 움직였는가?
-      if (avgHip > 40 && avgAnkle > 10) {
-        double jbjScore = (avgHip + avgAnkle * 2.0) / 100.0; // 발목 가중치 2배
-
-        // [허리 안정성 페널티]
-        // 허리가 흔들리면(분산 > 10) 둔근 힘 누수 발생
-        double spineVar = jointVariances['spine'] ?? 0.0;
-        double corePenalty = spineVar > 10.0 ? 0.7 : 1.0; // 불안정하면 30% 감소
-
-        synergy['glutes'] = (jbjScore * corePenalty).clamp(
-          1.0,
-          2.2,
-        ); // 둔근 최대 2.2배 가산
-      }
-    }
-
-    // 기본값 설정 (시너지가 없을 경우 1.0)
-    synergy.putIfAbsent('pecs_lats', () => 1.0);
-    synergy.putIfAbsent('delts_traps', () => 1.0);
-    synergy.putIfAbsent('traps_comp', () => 1.0);
-    synergy.putIfAbsent('glutes', () => 1.0);
-
-    return synergy;
-  }
-
-  // =======================================================
-  // [Step 3] 근육 매핑 및 요추 안정성 평가 (Mapping)
-  // =======================================================
-  static Map<String, double> _mapToMuscles(
-    Map<String, double> contributions,
-    Map<String, double> qualities,
-    double rhythmScore,
-    String motionType,
-    String targetArea, // 'UPPER', 'LOWER', 'FULL'
-    Map<String, double> jointDeltas, // 요추 ROM 확인용
-    Map<String, double> jointVariances, // 요추 떨림 확인용
-    Map<String, double> synergy, // [New] 복합 관절 시너지 계수
-  ) {
-    final scores = <String, double>{};
-
-    // [1] 타겟 부위에 따른 가중치 설정
-    double upperMultiplier = 3.5;
-    double lowerMultiplier = 3.5;
-
-    if (targetArea.toUpperCase() == 'UPPER') {
-      upperMultiplier = 4.5;
-      lowerMultiplier = 1.0;
-    } else if (targetArea.toUpperCase() == 'LOWER') {
-      upperMultiplier = 1.0;
-      lowerMultiplier = 4.5;
-    }
-
-    // 기본 계산 함수 (multiplier 적용)
-    double calc(String jointKey, double multiplier) {
-      double contrib = contributions[jointKey] ?? 0.0;
-      double qual = qualities[jointKey] ?? 0.0;
-      return (qual * (contrib * multiplier)).clamp(0.0, 100.0);
-    }
-
-    // --- 하체 근육 ---
-    scores['left_quadriceps'] = calc('leftKnee', lowerMultiplier);
-    scores['right_quadriceps'] = calc('rightKnee', lowerMultiplier);
-
-    // 하체 시너지 계수 적용
-    double gluteSynergy = synergy['glutes'] ?? 1.0;
-    scores['left_glutes'] = (calc('leftHip', lowerMultiplier) * gluteSynergy)
-        .clamp(0.0, 100.0);
-    scores['right_glutes'] = (calc('rightHip', lowerMultiplier) * gluteSynergy)
-        .clamp(0.0, 100.0);
-    scores['left_hamstrings'] =
-        (calc('leftHip', lowerMultiplier) * 0.5 +
-        calc('leftKnee', lowerMultiplier) * 0.5);
-    scores['right_hamstrings'] =
-        (calc('rightHip', lowerMultiplier) * 0.5 +
-        calc('rightKnee', lowerMultiplier) * 0.5);
-
-    // --- 상체 근육 ---
-    double shoulderLeftRaw = calc('leftShoulder', upperMultiplier);
-    double shoulderRightRaw = calc('rightShoulder', upperMultiplier);
-
-    // 상체 시너지 계수 적용
-    double pecSynergy = synergy['pecs_lats'] ?? 1.0;
-    double deltSynergy = synergy['delts_traps'] ?? 1.0;
-    double trapsCompensation = synergy['traps_comp'] ?? 1.0; // [New] 승모근 보상 계수
-
-    // 승모근: 기존 trapFactor + 보상 계수 적용
-    double trapFactor = (1.0 - rhythmScore).clamp(0.0, 1.0);
-    scores['trapezius'] =
-        ((shoulderLeftRaw + shoulderRightRaw) *
-                trapFactor *
-                1.5 *
-                trapsCompensation)
-            .clamp(0.0, 100.0);
-
-    double latsFactor = rhythmScore;
-
-    scores['left_latissimus'] = (shoulderLeftRaw * latsFactor * pecSynergy)
-        .clamp(0.0, 100.0);
-    scores['right_latissimus'] = (shoulderRightRaw * latsFactor * pecSynergy)
-        .clamp(0.0, 100.0);
-    scores['left_pectorals'] = (shoulderLeftRaw * latsFactor * 0.9 * pecSynergy)
-        .clamp(0.0, 100.0);
-    scores['right_pectorals'] =
-        (shoulderRightRaw * latsFactor * 0.9 * pecSynergy).clamp(0.0, 100.0);
-    // [Task 3] 상체 말단부 억제: 앵커링이 높을수록 팔/어깨 점수 감소
-    // 논리: "몸통(Core/Torso)으로 밀면 팔은 거들 뿐이다."
-    double armSuppression = 1.0 - ((pecSynergy - 1.0) * 0.6).clamp(0.0, 0.6);
-    // 예: pecSynergy = 1.5 -> armSuppression = 1.0 - 0.3 = 0.7 (30% 감소)
-    // 예: pecSynergy = 2.0 -> armSuppression = 1.0 - 0.6 = 0.4 (60% 감소, 최대)
-
-    scores['left_deltoids'] = (shoulderLeftRaw * deltSynergy * armSuppression).clamp(0.0, 100.0);
-    scores['right_deltoids'] = (shoulderRightRaw * deltSynergy * armSuppression).clamp(0.0, 100.0);
-    scores['left_biceps'] = (calc('leftElbow', upperMultiplier) * armSuppression).clamp(0.0, 100.0);
-    scores['right_biceps'] = (calc('rightElbow', upperMultiplier) * armSuppression).clamp(0.0, 100.0);
-    scores['left_triceps'] = (calc('leftElbow', upperMultiplier) * armSuppression).clamp(0.0, 100.0);
-    scores['right_triceps'] = (calc('rightElbow', upperMultiplier) * armSuppression).clamp(0.0, 100.0);
-
-    // [2] 기립근(Erector Spinae) = 안정성(Stability) 평가
-    double spineRom = jointDeltas['spine'] ?? 0.0;
-    double spineVar = jointVariances['spine'] ?? 0.0;
-    double instabilityPenalty = 0.0;
-
-    if (motionType == 'ISOTONIC') {
-      if (spineRom > 10.0) {
-        instabilityPenalty = ((spineRom - 10.0) * 4.0).clamp(0.0, 100.0);
-      }
-    } else {
-      if (spineVar > 5.0) {
-        instabilityPenalty = ((spineVar - 5.0) * 10.0).clamp(0.0, 100.0);
-      }
-    }
-
-    double stabilityScore = (100.0 - instabilityPenalty).clamp(0.0, 100.0);
-    scores['erector_spinae'] = stabilityScore;
-
-    // [3] 에너지 누수(Energy Leak) 적용
-    double efficiencyFactor = 1.0 - (instabilityPenalty / 250.0);
-
-    if (targetArea.toUpperCase() == 'UPPER') {
-      scores['left_latissimus'] =
-          (scores['left_latissimus']! * efficiencyFactor);
-      scores['right_latissimus'] =
-          (scores['right_latissimus']! * efficiencyFactor);
-      scores['left_pectorals'] = (scores['left_pectorals']! * efficiencyFactor);
-      scores['right_pectorals'] =
-          (scores['right_pectorals']! * efficiencyFactor);
-    } else if (targetArea.toUpperCase() == 'LOWER') {
-      scores['left_glutes'] = (scores['left_glutes']! * efficiencyFactor);
-      scores['right_glutes'] = (scores['right_glutes']! * efficiencyFactor);
-      scores['left_hamstrings'] =
-          (scores['left_hamstrings']! * efficiencyFactor);
-      scores['right_hamstrings'] =
-          (scores['right_hamstrings']! * efficiencyFactor);
-    }
-
-    return scores;
+    final v1 = a.subtract(b);
+    final v2 = c.subtract(b);
+    
+    final dot = v1.dot(v2);
+    final len1 = math.sqrt(v1.x * v1.x + v1.y * v1.y + v1.z * v1.z);
+    final len2 = math.sqrt(v2.x * v2.x + v2.y * v2.y + v2.z * v2.z);
+    
+    if (len1 == 0.0 || len2 == 0.0) return 0.0;
+    
+    final cosAngle = dot / (len1 * len2);
+    final clampedCos = cosAngle.clamp(-1.0, 1.0);
+    return math.acos(clampedCos);
   }
 
   // =======================================================
   // [Main] 통합 분석 실행 (Entry Point)
   // =======================================================
+  
+  /// 생체역학 분석 수행
+  /// 
+  /// **주의:** 기존 파라미터(jointDeltas, jointVariances 등)는 호환성을 위해 유지되지만,
+  /// 내부 로직에서는 사용하지 않고 오직 landmarks와 dt로만 계산합니다.
   static Map<String, dynamic> performAnalysis({
-    required Map<String, double> jointDeltas,
-    required Map<String, double> jointVariances,
-    required Map<String, double> jointVelocities,
-    required Map<String, double> visibilityMap,
-    required double duration,
-    required double averageRhythmScore,
+    required Map<String, Point3D> landmarks,
+    required double dt, // [Critical] 물리 엔진용 시간 변화량 (초 단위)
+    // 아래는 호환성을 위해 유지하되 내부에서는 사용하지 않음
+    required Map<String, double> jointDeltas, // ignore: unused_parameter
+    required Map<String, double> jointVariances, // ignore: unused_parameter
+    required Map<String, double> jointVelocities, // ignore: unused_parameter
+    required Map<String, double> visibilityMap, // ignore: unused_parameter
+    required double duration, // ignore: unused_parameter
+    required double averageRhythmScore, // ignore: unused_parameter
     required String motionType,
     required String targetArea,
   }) {
-    // [측면 촬영 보정] 가시성 불균형 감지 및 미러링
-    Map<String, double> adjustedJointDeltas = Map.from(jointDeltas);
-    Map<String, double> adjustedVisibilityMap = Map.from(visibilityMap);
-    Map<String, double> adjustedJointVariances = Map.from(jointVariances);
-    Map<String, double> adjustedJointVelocities = Map.from(jointVelocities);
+    // 1. 정규화
+    final normalizedLandmarks = VectorUtils.normalizeLandmarks(landmarks);
+    
+    // 2. 각도 계산 (라디안 단위)
+    final calculatedAngles = <String, double>{};
+    
+    // ✅ 어깨 각도 계산 (Spine Mid, Shoulder, Elbow)
+    // Spine Mid(척추 중부)를 양쪽 어깨의 중점으로 가정
+    if (normalizedLandmarks.containsKey('left_shoulder') &&
+        normalizedLandmarks.containsKey('right_shoulder')) {
+      
+      final leftShoulder = normalizedLandmarks['left_shoulder']!;
+      final rightShoulder = normalizedLandmarks['right_shoulder']!;
+      final spineMid = leftShoulder.midpoint(rightShoulder); // Point3D의 midpoint 메서드 사용
 
-    // 왼쪽/오른쪽 관절 가시성 평균 계산
-    double leftVisibilityAvg = 0.0;
-    double rightVisibilityAvg = 0.0;
-    int leftCount = 0;
-    int rightCount = 0;
-
-    visibilityMap.forEach((key, value) {
-      if (key.toLowerCase().contains('left')) {
-        leftVisibilityAvg += value;
-        leftCount++;
-      } else if (key.toLowerCase().contains('right')) {
-        rightVisibilityAvg += value;
-        rightCount++;
+      // 왼쪽 어깨 각도 계산 (spine mid, left shoulder, left elbow)
+      if (normalizedLandmarks.containsKey('left_elbow')) {
+        calculatedAngles['left_shoulder'] = _calculateAngle(
+          spineMid,
+          leftShoulder,
+          normalizedLandmarks['left_elbow']!,
+        );
       }
-    });
 
-    if (leftCount > 0) leftVisibilityAvg /= leftCount;
-    if (rightCount > 0) rightVisibilityAvg /= rightCount;
-
-    // 가시성 차이가 0.3(30%) 이상이면 측면 촬영으로 판단
-    double visibilityDiff = (leftVisibilityAvg - rightVisibilityAvg).abs();
-    bool isSideView = visibilityDiff >= 0.3;
-
-    if (isSideView) {
-      // 잘 보이는 쪽 결정
-      bool leftSideVisible = leftVisibilityAvg > rightVisibilityAvg;
-
-      // 안 보이는 쪽에 잘 보이는 쪽 데이터 미러링
-      if (leftSideVisible) {
-        // 왼쪽 → 오른쪽 미러링
-        adjustedJointDeltas['rightHip'] = adjustedJointDeltas['leftHip'] ?? 0.0;
-        adjustedJointDeltas['rightKnee'] =
-            adjustedJointDeltas['leftKnee'] ?? 0.0;
-        adjustedJointDeltas['rightAnkle'] =
-            adjustedJointDeltas['leftAnkle'] ?? 0.0;
-        adjustedJointDeltas['rightShoulder'] =
-            adjustedJointDeltas['leftShoulder'] ?? 0.0;
-        adjustedJointDeltas['rightElbow'] =
-            adjustedJointDeltas['leftElbow'] ?? 0.0;
-
-        adjustedVisibilityMap['rightHip'] =
-            adjustedVisibilityMap['leftHip'] ?? 0.0;
-        adjustedVisibilityMap['rightKnee'] =
-            adjustedVisibilityMap['leftKnee'] ?? 0.0;
-        adjustedVisibilityMap['rightAnkle'] =
-            adjustedVisibilityMap['leftAnkle'] ?? 0.0;
-        adjustedVisibilityMap['rightShoulder'] =
-            adjustedVisibilityMap['leftShoulder'] ?? 0.0;
-        adjustedVisibilityMap['rightElbow'] =
-            adjustedVisibilityMap['leftElbow'] ?? 0.0;
-
-        adjustedJointVariances['rightHip'] =
-            adjustedJointVariances['leftHip'] ?? 0.0;
-        adjustedJointVariances['rightKnee'] =
-            adjustedJointVariances['leftKnee'] ?? 0.0;
-        adjustedJointVariances['rightAnkle'] =
-            adjustedJointVariances['leftAnkle'] ?? 0.0;
-        adjustedJointVariances['rightShoulder'] =
-            adjustedJointVariances['leftShoulder'] ?? 0.0;
-        adjustedJointVariances['rightElbow'] =
-            adjustedJointVariances['leftElbow'] ?? 0.0;
-
-        adjustedJointVelocities['rightHip'] =
-            adjustedJointVelocities['leftHip'] ?? 0.0;
-        adjustedJointVelocities['rightKnee'] =
-            adjustedJointVelocities['leftKnee'] ?? 0.0;
-        adjustedJointVelocities['rightAnkle'] =
-            adjustedJointVelocities['leftAnkle'] ?? 0.0;
-        adjustedJointVelocities['rightShoulder'] =
-            adjustedJointVelocities['leftShoulder'] ?? 0.0;
-        adjustedJointVelocities['rightElbow'] =
-            adjustedJointVelocities['leftElbow'] ?? 0.0;
-      } else {
-        // 오른쪽 → 왼쪽 미러링
-        adjustedJointDeltas['leftHip'] = adjustedJointDeltas['rightHip'] ?? 0.0;
-        adjustedJointDeltas['leftKnee'] =
-            adjustedJointDeltas['rightKnee'] ?? 0.0;
-        adjustedJointDeltas['leftAnkle'] =
-            adjustedJointDeltas['rightAnkle'] ?? 0.0;
-        adjustedJointDeltas['leftShoulder'] =
-            adjustedJointDeltas['rightShoulder'] ?? 0.0;
-        adjustedJointDeltas['leftElbow'] =
-            adjustedJointDeltas['rightElbow'] ?? 0.0;
-
-        adjustedVisibilityMap['leftHip'] =
-            adjustedVisibilityMap['rightHip'] ?? 0.0;
-        adjustedVisibilityMap['leftKnee'] =
-            adjustedVisibilityMap['rightKnee'] ?? 0.0;
-        adjustedVisibilityMap['leftAnkle'] =
-            adjustedVisibilityMap['rightAnkle'] ?? 0.0;
-        adjustedVisibilityMap['leftShoulder'] =
-            adjustedVisibilityMap['rightShoulder'] ?? 0.0;
-        adjustedVisibilityMap['leftElbow'] =
-            adjustedVisibilityMap['rightElbow'] ?? 0.0;
-
-        adjustedJointVariances['leftHip'] =
-            adjustedJointVariances['rightHip'] ?? 0.0;
-        adjustedJointVariances['leftKnee'] =
-            adjustedJointVariances['rightKnee'] ?? 0.0;
-        adjustedJointVariances['leftAnkle'] =
-            adjustedJointVariances['rightAnkle'] ?? 0.0;
-        adjustedJointVariances['leftShoulder'] =
-            adjustedJointVariances['rightShoulder'] ?? 0.0;
-        adjustedJointVariances['leftElbow'] =
-            adjustedJointVariances['rightElbow'] ?? 0.0;
-
-        adjustedJointVelocities['leftHip'] =
-            adjustedJointVelocities['rightHip'] ?? 0.0;
-        adjustedJointVelocities['leftKnee'] =
-            adjustedJointVelocities['rightKnee'] ?? 0.0;
-        adjustedJointVelocities['leftAnkle'] =
-            adjustedJointVelocities['rightAnkle'] ?? 0.0;
-        adjustedJointVelocities['leftShoulder'] =
-            adjustedJointVelocities['rightShoulder'] ?? 0.0;
-        adjustedJointVelocities['leftElbow'] =
-            adjustedJointVelocities['rightElbow'] ?? 0.0;
+      // 오른쪽 어깨 각도 계산 (spine mid, right shoulder, right elbow)
+      if (normalizedLandmarks.containsKey('right_elbow')) {
+        calculatedAngles['right_shoulder'] = _calculateAngle(
+          spineMid,
+          rightShoulder,
+          normalizedLandmarks['right_elbow']!,
+        );
       }
     }
-
-    // [Task 1] 타겟 부위에 집중하기 위한 노이즈 필터링
-    // 선택하지 않은 부위의 관절 움직임은 분석에서 배제(축소)함
-    bool isUpperOnly = targetArea.toUpperCase() == 'UPPER';
-    bool isLowerOnly = targetArea.toUpperCase() == 'LOWER';
-
-    final filteredJointDeltas = Map<String, double>.from(adjustedJointDeltas);
-
-    for (var key in filteredJointDeltas.keys) {
-      bool isLowerJoint = key.toLowerCase().contains('hip') ||
-          key.toLowerCase().contains('knee') ||
-          key.toLowerCase().contains('ankle');
-      bool isUpperJoint = key.toLowerCase().contains('shoulder') ||
-          key.toLowerCase().contains('elbow') ||
-          key.toLowerCase().contains('wrist');
-
-      if (isUpperOnly && isLowerJoint) {
-        filteredJointDeltas[key] = (filteredJointDeltas[key] ?? 0) * 0.1; // 하체 무시
-      }
-      if (isLowerOnly && isUpperJoint) {
-        filteredJointDeltas[key] = (filteredJointDeltas[key] ?? 0) * 0.1; // 상체 무시
-      }
-    }
-
-    // 1. 관절 기여도 계산 (Quantity)
-    final contributions = _calculateJointContribution(
-      filteredJointDeltas, // 필터링된 데이터 사용
-      adjustedVisibilityMap, // 미러링된 데이터 사용
-      targetArea,
-    );
-
-    // [New] JBJ 수치 보정 계수 계산 (텍스트 없음, 오직 숫자)
-    final jbjFactors = _calculateJBJFactors(
-      filteredJointDeltas, // 필터링된 데이터 사용
-      targetArea.toUpperCase(),
-    );
-
-    // 2. 관절별 품질 평가 (JBJ 수치 적용)
-    final qualities = <String, double>{};
-    for (final key in filteredJointDeltas.keys) {
-      // 필터링된 데이터 사용
-      // 기본 품질 점수 계산
-      double baseQuality = _evaluateMovementQuality(
-        key,
-        filteredJointDeltas[key] ?? 0.0, // 필터링된 데이터 사용
-        adjustedJointVariances[key] ?? 0.0, // 미러링된 데이터 사용
-        adjustedJointVelocities[key] ?? 0.0, // 미러링된 데이터 사용
-        duration,
-        motionType.toUpperCase(),
+    
+    // 무릎 각도 (hip, knee, ankle)
+    if (normalizedLandmarks.containsKey('left_hip') &&
+        normalizedLandmarks.containsKey('left_knee') &&
+        normalizedLandmarks.containsKey('left_ankle')) {
+      calculatedAngles['left_knee'] = _calculateAngle(
+        normalizedLandmarks['left_hip']!,
+        normalizedLandmarks['left_knee']!,
+        normalizedLandmarks['left_ankle']!,
       );
-
-      // JBJ Factor 곱하기 (단순 수치 보정)
-      // 이웃 관절이 잘 움직였으면 점수 UP, 아니면 DOWN
-      double jbjMultiplier = jbjFactors[key] ?? 1.0;
-
-      qualities[key] = (baseQuality * jbjMultiplier).clamp(0.0, 100.0);
     }
-
-    // [Step 2.5] 복합 관절 시너지 계산
-    final synergy = _calculateCompoundSynergy(
-      filteredJointDeltas, // 필터링된 데이터 사용
-      targetArea.toUpperCase(),
-      averageRhythmScore, // 앵커링 효과 확인용
-      jbjFactors, // JBJ 기반 협응도
-      adjustedJointVariances, // 허리 떨림 확인용
-    );
-
-    // 3. 근육 점수 매핑 (Mapping)
-    final muscleScores = _mapToMuscles(
-      contributions,
-      qualities,
-      averageRhythmScore,
-      motionType.toUpperCase(),
-      targetArea,
-      filteredJointDeltas, // 필터링된 데이터 사용
-      adjustedJointVariances, // 미러링된 데이터 사용
-      synergy, // [New] 복합 관절 시너지 계수
-    );
-
-    // 4. 정렬 (그룹핑 정렬 로직 적용)
-    // 로직: 같은 근육(예: 대퇴사두)의 좌/우를 묶고, 그룹 내 최고점을 기준으로 그룹 간 순서를 정함.
-
-    // 4-1. 그룹핑 (좌/우 제거한 이름 기준)
-    final grouped = <String, List<MapEntry<String, double>>>{};
-    for (var entry in muscleScores.entries) {
-      // 'left_', 'right_' 등 접두어를 제거하여 baseName 추출 (대소문자/언더스코어 모두 처리)
-      String baseName = entry.key
-          .toLowerCase()
-          .replaceFirst('left_', '')
-          .replaceFirst('right_', '')
-          .replaceFirst('left', '')
-          .replaceFirst('right', '')
-          .trim(); // 공백 제거
-
-      grouped.putIfAbsent(baseName, () => []).add(entry);
+    if (normalizedLandmarks.containsKey('right_hip') &&
+        normalizedLandmarks.containsKey('right_knee') &&
+        normalizedLandmarks.containsKey('right_ankle')) {
+      calculatedAngles['right_knee'] = _calculateAngle(
+        normalizedLandmarks['right_hip']!,
+        normalizedLandmarks['right_knee']!,
+        normalizedLandmarks['right_ankle']!,
+      );
     }
-
-    // 4-2. 그룹별 최고점 계산 및 그룹 정렬 (내림차순)
-    var sortedBaseNames = grouped.keys.toList();
-    sortedBaseNames.sort((a, b) {
-      // 각 그룹의 최고 점수 찾기
-      double maxA = grouped[a]!.map((e) => e.value).reduce(math.max);
-      double maxB = grouped[b]!.map((e) => e.value).reduce(math.max);
-      return maxB.compareTo(maxA);
-    });
-
-    // 4-3. 최종 리스트 생성 (그룹 순서대로, 그룹 내에서는 점수 높은 순)
-    final sortedEntries = <MapEntry<String, double>>[];
-    for (var baseName in sortedBaseNames) {
-      var entries = grouped[baseName]!;
-      // 그룹 내에서도 내림차순 (예: 왼쪽 60, 오른쪽 50이면 왼쪽이 위로)
-      entries.sort((a, b) => b.value.compareTo(a.value));
-      sortedEntries.addAll(entries);
+    
+    // 팔꿈치 각도 (shoulder, elbow, wrist)
+    if (normalizedLandmarks.containsKey('left_shoulder') &&
+        normalizedLandmarks.containsKey('left_elbow') &&
+        normalizedLandmarks.containsKey('left_wrist')) {
+      calculatedAngles['left_elbow'] = _calculateAngle(
+        normalizedLandmarks['left_shoulder']!,
+        normalizedLandmarks['left_elbow']!,
+        normalizedLandmarks['left_wrist']!,
+      );
     }
-
-    // 5. 등척성 경고 메시지
-    String stabilityWarning = "";
-    if (motionType.toUpperCase() == 'ISOMETRIC') {
-      double spineVar = jointVariances['spine'] ?? 0.0;
-      if (spineVar > 5.0) {
-        stabilityWarning = "허리(요추)의 흔들림이 감지되었습니다. 코어에 더 집중하세요.";
-      }
+    if (normalizedLandmarks.containsKey('right_shoulder') &&
+        normalizedLandmarks.containsKey('right_elbow') &&
+        normalizedLandmarks.containsKey('right_wrist')) {
+      calculatedAngles['right_elbow'] = _calculateAngle(
+        normalizedLandmarks['right_shoulder']!,
+        normalizedLandmarks['right_elbow']!,
+        normalizedLandmarks['right_wrist']!,
+      );
     }
-
-    // [수정] 관절 데이터(rom_data) 생성 로직
-    // 전략: 가장 많이 움직인 관절을 100% 기준으로 삼는 '상대적 강도' 방식
-    final displayJointData = <String, double>{};
-
-    // 1. 최대 움직임 값 찾기 (Spine 제외)
-    double maxDelta = 0.0;
-    for (var entry in filteredJointDeltas.entries) {
-      if (entry.key != 'spine' && entry.value > maxDelta) maxDelta = entry.value;
+    
+    // 고관절 각도 (spine mid, hip, knee)
+    if (normalizedLandmarks.containsKey('left_shoulder') &&
+        normalizedLandmarks.containsKey('right_shoulder') &&
+        normalizedLandmarks.containsKey('left_hip') &&
+        normalizedLandmarks.containsKey('left_knee')) {
+      final spineMid = normalizedLandmarks['left_shoulder']!.midpoint(
+        normalizedLandmarks['right_shoulder']!,
+      );
+      calculatedAngles['left_hip'] = _calculateAngle(
+        spineMid,
+        normalizedLandmarks['left_hip']!,
+        normalizedLandmarks['left_knee']!,
+      );
     }
-
-    // 2. 안전장치: 최대 움직임이 10도 미만이면 분석 결과 없음 (노이즈)
-    if (maxDelta >= 10.0) {
-      for (var entry in filteredJointDeltas.entries) {
-        if (entry.key == 'spine') continue; // 기립근은 관절 탭 제외
-
-        double relativeScore = (entry.value / maxDelta * 100.0);
-
-        // 10% 미만은 주동 관절이 아니라고 판단하여 제외
-        if (relativeScore >= 10.0) {
-          displayJointData[entry.key] = relativeScore;
+    if (normalizedLandmarks.containsKey('right_shoulder') &&
+        normalizedLandmarks.containsKey('left_shoulder') &&
+        normalizedLandmarks.containsKey('right_hip') &&
+        normalizedLandmarks.containsKey('right_knee')) {
+      final spineMid = normalizedLandmarks['right_shoulder']!.midpoint(
+        normalizedLandmarks['left_shoulder']!,
+      );
+      calculatedAngles['right_hip'] = _calculateAngle(
+        spineMid,
+        normalizedLandmarks['right_hip']!,
+        normalizedLandmarks['right_knee']!,
+      );
+    }
+    
+    // 발목 각도 (knee, ankle, foot_index)
+    if (normalizedLandmarks.containsKey('left_knee') &&
+        normalizedLandmarks.containsKey('left_ankle') &&
+        normalizedLandmarks.containsKey('left_foot_index')) {
+      calculatedAngles['left_ankle'] = _calculateAngle(
+        normalizedLandmarks['left_knee']!,
+        normalizedLandmarks['left_ankle']!,
+        normalizedLandmarks['left_foot_index']!,
+      );
+    }
+    if (normalizedLandmarks.containsKey('right_knee') &&
+        normalizedLandmarks.containsKey('right_ankle') &&
+        normalizedLandmarks.containsKey('right_foot_index')) {
+      calculatedAngles['right_ankle'] = _calculateAngle(
+        normalizedLandmarks['right_knee']!,
+        normalizedLandmarks['right_ankle']!,
+        normalizedLandmarks['right_foot_index']!,
+      );
+    }
+    
+    // 3. 안정성/패턴 분석
+    final stability = StabilityCalculator.calculateStability(normalizedLandmarks);
+    final motionResult = _motionAnalyzer.analyze(normalizedLandmarks);
+    final pattern = motionResult.pattern;
+    final movementState = motionResult.state;
+    
+    // 4. Stabilization Check
+    if (pattern == MotionPattern.STABILIZING) {
+      return _emptyResult();
+    }
+    
+    // 5. 물리 엔진 계산 (Joint Loop)
+    final jointStressScores = <String, double>{};
+    double totalForce = 0.0;
+    
+    // 관절 계산 순서를 정의 (상위 관절이 먼저 오도록)
+    // MVP: 현재 프로젝트의 모든 관절 키를 명시적으로 포함하여 누락 방지
+    final orderedJoints = [
+      'left_shoulder', 'right_shoulder',  // 상위 관절 먼저 (팔꿈치 계산에 필요)
+      'left_elbow', 'right_elbow',        // 팔꿈치는 어깨 다음
+      'left_hip', 'right_hip',
+      'left_knee', 'right_knee',
+      'left_ankle', 'right_ankle',
+    ];
+    
+    for (String jointName in orderedJoints) {
+      final controller = _jointControllers[jointName];
+      if (controller == null) continue;
+      
+      final currentAngle = calculatedAngles[jointName];
+      if (currentAngle == null) continue;
+      
+      final prevAngle = _previousAngles[jointName] ?? currentAngle;
+      final muscleForce = 1.0; // 기본값 (추후 실제 근육 힘 계산 로직 추가 가능)
+      
+      // 팔꿈치일 때 상위 관절(어깨) 스트레스 가져오기
+      double? bigMuscleForce;
+      if (jointName == 'left_elbow') {
+        final shoulderScore = jointStressScores['left_shoulder'];
+        if (shoulderScore != null) {
+          // 점수를 0.0~1.0 비율로 변환 (스트레스 점수는 0.0~1.0 범위이므로 그대로 사용)
+          bigMuscleForce = shoulderScore;
+        }
+      } else if (jointName == 'right_elbow') {
+        final shoulderScore = jointStressScores['right_shoulder'];
+        if (shoulderScore != null) {
+          // 점수를 0.0~1.0 비율로 변환 (스트레스 점수는 0.0~1.0 범위이므로 그대로 사용)
+          bigMuscleForce = shoulderScore;
         }
       }
+      
+      final stressScore = controller.calculateJointStress(
+        currentAngle,
+        prevAngle,
+        dt,
+        muscleForce,
+        bigMuscleForce: bigMuscleForce, // 선택적 파라미터로 전달 (0.0~1.0 범위)
+        debugName: jointName, // ✅ 디버깅을 위해 관절 이름 전달
+      );
+      
+      jointStressScores[jointName] = stressScore;
+      _previousAngles[jointName] = currentAngle; // 다음 프레임을 위해 저장
+      totalForce += stressScore;
     }
-    // maxDelta < 10.0이면 displayJointData는 빈 맵으로 반환됨
+    
+    // 6. 에너지 누수 계산
+    final energyResult = EnergyLeakEngine.calculateEnergyLeak(
+      totalForce: totalForce,
+      stability: stability,
+      pattern: pattern,
+      movementState: movementState,
+      targetArea: targetArea,
+    );
+
+    // 7. 결과 매핑 (Data Scaling 적용)
+    // Score Scaling: 0.0~1.0 → 0~100
+    final romData = <String, double>{};
+    
+    // jointStressScores와 energyResult의 jointStressScores를 합침
+    final allJointStresses = <String, double>{};
+    allJointStresses.addAll(jointStressScores);
+    final energyJointStresses = energyResult['jointStressScores'] as Map<String, double>?;
+    if (energyJointStresses != null) {
+      energyJointStresses.forEach((joint, stress) {
+        allJointStresses[joint] = (allJointStresses[joint] ?? 0.0) + stress;
+      });
+    }
+    
+    // Target Filtering: 타겟 부위에 따라 관절 점수 필터링
+    final upperBodyJoints = {'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow'};
+    final lowerBodyJoints = {'left_knee', 'right_knee', 'left_hip', 'right_hip', 'left_ankle', 'right_ankle'};
+    
+    allJointStresses.forEach((joint, stressScore) {
+      double filteredScore = stressScore;
+      
+      // UPPER 타겟: 하체 관절 점수에 0.1 곱하기
+      if (targetArea.toUpperCase() == 'UPPER' && lowerBodyJoints.contains(joint)) {
+        filteredScore = stressScore * 0.1;
+      }
+      // LOWER 타겟: 상체 관절 점수에 0.1 곱하기
+      else if (targetArea.toUpperCase() == 'LOWER' && upperBodyJoints.contains(joint)) {
+        filteredScore = stressScore * 0.1;
+      }
+      // FULL 타겟 또는 기타: 필터링 없음
+      
+      romData[joint] = (filteredScore * 100).round().toDouble();
+    });
+    
+    final muscleUsage = <String, double>{};
+    final effectiveScores = energyResult['effectiveMuscleScores'] as Map<String, double>?;
+    if (effectiveScores != null) {
+      effectiveScores.forEach((muscle, score) {
+        // Double Prefix 방지: 이미 'left_'나 'right_'로 시작하면 그대로 사용 (중복 방지)
+        final scaledScore = (score * 100).clamp(0.0, 100.0); // 가중치로 인한 100% 초과 방지
+        if (muscle.startsWith('left_') || muscle.startsWith('right_')) {
+          muscleUsage[muscle] = scaledScore;
+        } else {
+          // 순수 근육명이면 좌우로 분리하여 할당
+          muscleUsage['left_$muscle'] = scaledScore;
+          muscleUsage['right_$muscle'] = scaledScore;
+        }
+      });
+    }
+
+    // compensationMuscleScores도 추가 (보상 근육)
+    final compensationScores = energyResult['compensationMuscleScores'] as Map<String, double>?;
+    if (compensationScores != null) {
+      compensationScores.forEach((muscle, score) {
+        // Double Prefix 방지: 이미 'left_'나 'right_'로 시작하면 그대로 사용 (중복 방지)
+        final scaledScore = (score * 100).clamp(0.0, 100.0); // 가중치로 인한 100% 초과 방지
+        if (muscle.startsWith('left_') || muscle.startsWith('right_')) {
+          muscleUsage[muscle] = ((muscleUsage[muscle] ?? 0.0) + scaledScore).clamp(0.0, 100.0);
+        } else {
+          // 순수 근육명이면 좌우로 분리하여 할당
+          muscleUsage['left_$muscle'] = ((muscleUsage['left_$muscle'] ?? 0.0) + scaledScore).clamp(0.0, 100.0);
+          muscleUsage['right_$muscle'] = ((muscleUsage['right_$muscle'] ?? 0.0) + scaledScore).clamp(0.0, 100.0);
+        }
+      });
+    }
+    
+    // Thresholding: 최종 점수가 0.05 미만이면 0.0으로 처리
+    final threshold = 0.05;
+    romData.forEach((joint, score) {
+      if (score < threshold) {
+        romData[joint] = 0.0;
+      }
+    });
+    muscleUsage.forEach((muscle, score) {
+      if (score < threshold) {
+        muscleUsage[muscle] = 0.0;
+      }
+    });
+    
+    // Warning Formatting
+    final warnings = _convertStabilityMetricsToWarning(stability);
+    final stabilityWarning = warnings.isEmpty ? "" : warnings;
+    
+    // MotionPattern → String 변환
+    final biomechPattern = pattern.toString().split('.').last;
 
     return {
-      'detailed_muscle_usage': sanitizeOutputMap(
-        Map.fromEntries(sortedEntries),
-      ),
-      'rom_data': sanitizeOutputMap(displayJointData), // 이제 여기엔 %가 들어감
-      'biomech_pattern': targetArea,
+      'detailed_muscle_usage': sanitizeOutputMap(muscleUsage),
+      'rom_data': sanitizeOutputMap(romData),
+      'biomech_pattern': biomechPattern,
       'stability_warning': stabilityWarning,
     };
   }

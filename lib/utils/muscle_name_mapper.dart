@@ -18,12 +18,17 @@ class MuscleNameMapper {
     'deltoids': '삼각근', 'deltoid': '삼각근',
     'biceps': '이두근', 'triceps': '삼두근',
     'core': '코어', 'abs': '복근',
+    // [근육 - 추가]
+    'adductors': '내전근',
+    'abductors': '외전근',
+    'serratus': '전거근',
+    'rhomboids': '능형근',
   };
 
   // 2. 통합 번역 함수
   static String localize(String key) {
     if (key.isEmpty) return "-";
-    
+
     // 전처리: 소문자 변환 및 공백 제거 준비
     String normalized = key.trim().toLowerCase();
     String prefix = "";
