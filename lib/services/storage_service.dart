@@ -1,6 +1,7 @@
 import 'dart:io';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:video_compress/video_compress.dart';
 import 'supabase_service.dart';
 
 /// Supabase Storage 서비스
@@ -24,10 +25,32 @@ class StorageService {
     Function(double)? onProgress,
   }) async {
     try {
-      final fileSize = await file.length();
+      File? videoFile = file;
+
+      // 비디오 압축 수행
+      try {
+        final compressedFile = await VideoCompress.compressVideo(
+          file.path,
+          quality: VideoQuality.MediumQuality,
+          includeAudio: false, // 오디오 스트림 제거
+        );
+
+        if (compressedFile != null && compressedFile.file != null) {
+          videoFile = File(compressedFile.file!.path);
+        } else {
+          // 압축 실패 시 원본 파일로 폴백
+          videoFile = file;
+        }
+      } catch (e) {
+        // 압축 실패 시 원본 파일로 폴백
+        debugPrint('⚠️ [StorageService] 비디오 압축 실패, 원본 파일 사용: $e');
+        videoFile = file;
+      }
+
+      final fileSize = await videoFile.length();
       int uploadedBytes = 0;
 
-      final stream = file.openRead();
+      final stream = videoFile.openRead();
       final chunks = <List<int>>[];
 
       await for (final chunk in stream) {

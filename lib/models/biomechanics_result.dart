@@ -145,24 +145,18 @@ class BiomechanicsResult {
     this.engineVersion,
   });
 
-  /// Fuzzy Matching으로 근육 점수 조회 (백엔드 데이터만 사용)
-  /// 예: "Latissimus" -> "latissimus_dorsi", "lats" 등과 매칭
+  /// 표준 키로 근육 점수 조회 (직접 조회만 수행)
+  /// 표준 키: trapezius, latissimus, erector_spinae, pectorals, deltoids, biceps, triceps,
+  ///         quadriceps, hamstrings, glutes, adductors, calves
   /// 백엔드 데이터가 없으면 null 반환 (Fallback 없음)
-  double? getMuscleScore(String displayName) {
+  double? getMuscleScore(String standardKey) {
     if (muscleScores == null || muscleScores!.isEmpty) {
       return null; // 백엔드 데이터가 없으면 null 반환
     }
 
-    final normalized = _normalizeKey(displayName);
-    for (final entry in muscleScores!.entries) {
-      if (_normalizeKey(entry.key) == normalized ||
-          _normalizeKey(entry.key).contains(normalized) ||
-          normalized.contains(_normalizeKey(entry.key))) {
-        return entry.value.score;
-      }
-    }
-
-    return null; // 매칭 실패
+    // 표준 키로 직접 조회 (Fuzzy Matching 제거)
+    final normalized = _normalizeKey(standardKey);
+    return muscleScores![normalized]?.score;
   }
 
   /// Fuzzy Matching으로 관절 통계 조회 (백엔드 데이터만 사용)
@@ -355,22 +349,13 @@ class BiomechanicsResult {
         }
       }
 
-      // 🔧 새로운 필드 파싱: muscle_scores (유연한 키 매칭)
-      // VideoRepository에서 저장한 muscle_usage를 최우선으로 확인
+      // 🔧 새로운 필드 파싱: muscle_scores (단순화된 우선순위)
+      // 우선순위: muscle_usage → detailed_muscle_usage → muscle_scores
       Map<String, MuscleScore>? muscleScores;
       final muscleScoresRaw =
-          data['muscle_usage']
-              as Map<
-                String,
-                dynamic
-              >? ?? // <--- [NEW] VideoRepository에서 저장한 키 (최우선)
-          data['detailed_muscle_usage']
-              as Map<String, dynamic>? ?? // 로그에서 확인된 키
-          data['muscle_scores'] as Map<String, dynamic>? ??
-          data['muscleScores'] as Map<String, dynamic>? ??
-          data['muscles'] as Map<String, dynamic>? ??
-          data['detected_muscles'] as Map<String, dynamic>? ??
-          analysisResult['muscle_scores'] as Map<String, dynamic>?;
+          data['muscle_usage'] as Map<String, dynamic>? ??
+          data['detailed_muscle_usage'] as Map<String, dynamic>? ??
+          data['muscle_scores'] as Map<String, dynamic>?;
 
       debugPrint(
         '🔍 [BiomechanicsResult] muscle_scores 검색 결과: ${muscleScoresRaw != null ? "${muscleScoresRaw.length}개 항목" : "null"}',

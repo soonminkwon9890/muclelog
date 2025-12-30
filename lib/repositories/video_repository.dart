@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import 'package:video_compress/video_compress.dart';
 import '../services/storage_service.dart';
 import '../services/supabase_service.dart';
 import '../services/pose_detection_service.dart';
@@ -58,6 +59,38 @@ class VideoRepository {
       );
 
       // 2. Pose 데이터 기반 생체역학 분석 수행
+      // [NEW] 분석 전에 비디오를 먼저 압축 (네이티브 속도로 빠름)
+      File? compressedVideoFile;
+      try {
+        if (onProgress != null) onProgress(0.5);
+
+        debugPrint('📦 [VideoRepository] 분석 전 비디오 압축 시작');
+        final compressedVideo = await VideoCompress.compressVideo(
+          videoFile.path,
+          quality: VideoQuality.MediumQuality,
+          includeAudio: false,
+        );
+
+        if (compressedVideo == null ||
+            compressedVideo.path == null ||
+            compressedVideo.path!.isEmpty) {
+          throw Exception('비디오 압축 실패');
+        }
+
+        compressedVideoFile = File(compressedVideo.path!);
+        debugPrint(
+          '✅ [VideoRepository] 비디오 압축 완료: ${compressedVideoFile.path}',
+        );
+
+        if (onProgress != null) onProgress(0.6);
+      } catch (e) {
+        debugPrint('⚠️ [VideoRepository] 비디오 압축 실패, 원본 사용: $e');
+        compressedVideoFile = videoFile; // 압축 실패 시 원본 사용
+      }
+
+      // 이후의 모든 분석은 압축된 비디오 파일을 사용 (압축 실패 시 원본 사용)
+      final analysisVideoFile = compressedVideoFile;
+
       Map<String, dynamic> analysisResult = {
         'detailed_muscle_usage': <String, double>{},
         'rom_data': <String, double>{},
@@ -67,16 +100,16 @@ class VideoRepository {
       List<Pose> poses = [];
       List<int> timestamps = [];
 
-      if (onProgress != null) onProgress(0.5);
+      if (onProgress != null) onProgress(0.6);
       try {
-        // 비디오에서 Pose 추출 (timestamp 포함)
+        // 비디오에서 Pose 추출 (압축된 비디오 사용)
         final poseResult = await PoseDetectionService.instance
             .extractPosesFromVideoOptimized(
-              videoFile: videoFile,
+              videoFile: analysisVideoFile, // 압축된 비디오 사용
               sampleRate: 5, // 1초에 5프레임
               onProgress: (progress) {
                 if (onProgress != null) {
-                  onProgress(0.5 + (progress * 0.4)); // 50% ~ 90%
+                  onProgress(0.6 + (progress * 0.3)); // 60% ~ 90%
                 }
               },
             );
@@ -111,6 +144,16 @@ class VideoRepository {
         // 생체역학 분석 실패는 치명적이지 않으므로 로그만 남기고 계속 진행
         debugPrint('⚠️ [VideoRepository] 생체역학 분석 실패 (계속 진행): $e');
         debugPrint('⚠️ 스택 트레이스: $stackTrace');
+      }
+
+      // 분석 완료 후 임시 파일 정리
+      if (compressedVideoFile.path != videoFile.path) {
+        try {
+          await compressedVideoFile.delete();
+          debugPrint('🗑️ [VideoRepository] 압축된 임시 파일 삭제 완료');
+        } catch (e) {
+          debugPrint('⚠️ [VideoRepository] 임시 파일 삭제 실패: $e');
+        }
       }
 
       // 4. workout_logs 테이블에 영상 메타데이터 저장
@@ -207,34 +250,53 @@ class VideoRepository {
     final accumulatedWarnings = <String>{};
 
     // 프레임별 처리
+    Map<String, dynamic>? previousFrameResult; // 직전 프레임 결과 저장
+    int lastAnalyzedIndex = -1; // 마지막으로 분석한 프레임의 인덱스 (물리 엔진 dt 보정용)
+
     for (int i = 0; i < poses.length; i++) {
       final pose = poses[i];
       final landmarks = extractLandmarks(pose);
 
       if (landmarks.isEmpty) continue;
 
-      // dt 계산 (초 단위)
-      double dt = 0.033; // 기본값 (30fps 기준)
-      if (i > 0 && timestamps.length > i) {
-        dt = (timestamps[i] - timestamps[i - 1]) / 1000.0;
-        if (dt <= 0.0 || dt > 0.1) dt = 0.033; // 안전 장치
+      // 프레임 스키핑: 3프레임 중 1번만 분석 (i % 3 == 0)
+      Map<String, dynamic>? frameResult;
+      if (i % 3 == 0) {
+        // 분석하는 프레임일 때
+
+        // [CRITICAL] dt 계산: '현재 시간' - '마지막으로 분석한 프레임의 시간'
+        // 프레임을 건너뛰면 이동 거리는 3프레임치인데, dt를 1프레임치로 계산하면
+        // 속도와 힘이 3배로 뻥튀기되어 계산 오류 발생
+        double dt = 0.033; // 기본값 (30fps 기준)
+        if (lastAnalyzedIndex >= 0 &&
+            lastAnalyzedIndex < timestamps.length &&
+            i < timestamps.length) {
+          dt = (timestamps[i] - timestamps[lastAnalyzedIndex]) / 1000.0;
+          if (dt <= 0.0 || dt > 0.5) dt = 0.033; // 안전 장치 (최대 0.5초)
+        }
+
+        // 분석 수행
+        frameResult = MuscleMetricUtils.performAnalysis(
+          landmarks: landmarks,
+          dt: dt, // 보정된 dt 사용
+          jointDeltas: jointDeltas, // 호환성을 위해 전달 (내부에서는 ignore)
+          jointVariances: jointVariances,
+          jointVelocities: jointVelocities,
+          visibilityMap: visibilityMap,
+          duration: duration,
+          averageRhythmScore: avgRhythm,
+          motionType: motionType.toString().split('.').last,
+          targetArea: targetArea,
+        );
+        previousFrameResult = frameResult; // 저장
+        lastAnalyzedIndex = i; // 인덱스 갱신
+      } else {
+        // 건너뛴 프레임: 직전 프레임 결과 재사용 (보간)
+        frameResult = previousFrameResult;
+        if (frameResult == null) continue; // 첫 프레임이면 스킵
       }
 
-      // performAnalysis 호출
-      final frameResult = MuscleMetricUtils.performAnalysis(
-        landmarks: landmarks,
-        dt: dt,
-        jointDeltas: jointDeltas, // 호환성을 위해 전달 (내부에서는 ignore)
-        jointVariances: jointVariances,
-        jointVelocities: jointVelocities,
-        visibilityMap: visibilityMap,
-        duration: duration,
-        averageRhythmScore: avgRhythm,
-        motionType: motionType.toString().split('.').last,
-        targetArea: targetArea,
-      );
-
-      // 결과 누적 (평균화)
+      // 결과 누적 (기존 로직 유지)
       final frameMuscleUsage =
           frameResult['detailed_muscle_usage'] as Map<String, double>? ?? {};
       frameMuscleUsage.forEach((muscle, score) {

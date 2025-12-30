@@ -383,7 +383,7 @@ class _UploadFormScreenState extends State<UploadFormScreen> {
                 // 업로드 진행률 표시
                 if (_isUploading) ...[
                   const Text(
-                    '업로드 및 분석 중...',
+                    '압축 및 업로드 중...',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                   ),
                   const SizedBox(height: 8),

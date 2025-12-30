@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'point_3d.dart';
 
 /// 안정성 지표 결과 클래스
@@ -51,8 +50,9 @@ class StabilityCalculator {
   /// **반환:**
   /// - `StabilityMetrics`: 계산된 안정성 지표
   static StabilityMetrics calculateStability(
-    Map<String, Point3D> landmarks,
-  ) {
+    Map<String, Point3D> landmarks, {
+    bool isSideView = false, // [NEW] 측면 뷰 플래그
+  }) {
     // 가상 척추 정의
     final leftShoulder = landmarks['left_shoulder'];
     final rightShoulder = landmarks['right_shoulder'];
@@ -72,16 +72,25 @@ class StabilityCalculator {
       );
     }
 
-    final spineTop = leftShoulder.midpoint(rightShoulder);
-    final spineBottom = leftHip.midpoint(rightHip);
+    // [보완] 척추 랜드마크 안전 추출 및 Fallback 생성
+    // 중요: 위의 null 체크를 통과했으므로 leftShoulder, rightShoulder, leftHip, rightHip은 모두 non-null
+    // spine_top/bottom이 없으면 어깨/골반 중점을 대체값으로 사용
+    // 구현 시 이 순서를 반드시 지켜야 함: 1) 필수 랜드마크 null 체크 → 2) 척추 랜드마크 Fallback 생성
+    final spineTop = landmarks['spine_top'] ?? 
+                     leftShoulder.midpoint(rightShoulder);
+    
+    final spineBottom = landmarks['spine_bottom'] ?? 
+                        leftHip.midpoint(rightHip);
 
     // 상체 안정성 계산
     final elevationFactor = _calculateElevation(landmarks);
     final retractionFactor = _calculateRetraction(spineTop, spineBottom,
         leftShoulder, rightShoulder);
 
-    // 하체 안정성 계산
-    final valgusFactor = _calculateValgus(landmarks);
+    // [NEW] 하체 안정성 계산 - 측면 뷰일 때는 Valgus 계산 비활성화
+    final valgusFactor = isSideView 
+        ? 0.0  // 측면 뷰에서는 Valgus 계산 스킵 (좌우 무릎이 겹쳐 보여 오탐 발생)
+        : _calculateValgus(landmarks);
     final pelvicTiltFactor = _calculatePelvicTilt(landmarks, spineTop,
         spineBottom);
 
@@ -153,52 +162,41 @@ class StabilityCalculator {
 
   /// 무릎 안쪽 쏠림 (Knee Valgus) 계산
   /// 
-  /// (Hip-Ankle 직선) 대비 (Knee의 수평 거리)를 측정
-  /// valgusFactor = (ankleWidth - kneeWidth) / ankleWidth
-  /// 양수면 Valgus 심함, 0이면 정상
+  /// 새로운 기하학적 조건: Distance(LeftKnee, RightKnee) < Distance(LeftAnkle, RightAnkle) * 0.9
+  /// 조건이 true일 때만 Valgus Factor 계산 (0~1.0 범위)
+  /// Narrow Stance 예외 처리: 발목 너비가 0.15 미만이면 Valgus 검사 패스
   static double _calculateValgus(Map<String, Point3D> landmarks) {
-    final leftHip = landmarks['left_hip'];
-    final rightHip = landmarks['right_hip'];
     final leftKnee = landmarks['left_knee'];
     final rightKnee = landmarks['right_knee'];
     final leftAnkle = landmarks['left_ankle'];
     final rightAnkle = landmarks['right_ankle'];
 
-    if (leftHip == null ||
-        rightHip == null ||
-        leftKnee == null ||
+    if (leftKnee == null ||
         rightKnee == null ||
         leftAnkle == null ||
         rightAnkle == null) {
       return 0.0;
     }
 
-    // 고관절 너비
-    final hipWidth = leftHip.distanceTo(rightHip);
-
-    // 무릎 너비 (수평 거리만 고려: X, Y 좌표만 사용)
-    final kneeDx = rightKnee.x - leftKnee.x;
-    final kneeDy = rightKnee.y - leftKnee.y;
-    final kneeWidth = math.sqrt(kneeDx * kneeDx + kneeDy * kneeDy);
-
-    // 발목 너비 (수평 거리만 고려)
-    final ankleDx = rightAnkle.x - leftAnkle.x;
-    final ankleDy = rightAnkle.y - leftAnkle.y;
-    final ankleWidth = math.sqrt(ankleDx * ankleDx + ankleDy * ankleDy);
-
-    if (ankleWidth <= 0.0) {
-      return 0.0;
+    // 발목 거리 계산
+    final ankleDistance = leftAnkle.distanceTo(rightAnkle);
+    
+    // Narrow Stance 예외 처리: 발목이 너무 좁으면 Valgus 검사 패스
+    if (ankleDistance < 0.15) {
+      return 0.0; // Narrow Stance: 발목이 너무 좁으면 Valgus 검사 패스
     }
 
-    // Valgus 계산
-    // 무릎 너비가 발목 너비보다 현저히 좁을 경우
-    final valgusFactor = (ankleWidth - kneeWidth) / ankleWidth;
+    // 무릎 거리 계산
+    final kneeDistance = leftKnee.distanceTo(rightKnee);
 
-    // 무릎 너비가 발목 너비의 0.8배보다 작거나, 고관절 너비보다 현저히 좁을 때만 Valgus로 판단
-    if (kneeWidth < ankleWidth * 0.8 || kneeWidth < hipWidth * 0.7) {
+    // 새로운 기하학적 조건: 무릎 거리가 발목 거리의 0.9배보다 작으면 Valgus
+    if (kneeDistance < ankleDistance * 0.9) {
+      // Valgus Factor 계산: 좁아진 비율에 비례하여 0~1.0 범위로 정규화
+      final valgusFactor = 1.0 - (kneeDistance / (ankleDistance * 0.9));
       return valgusFactor.clamp(0.0, 1.0);
     }
 
+    // 조건이 false면 0.0 반환
     return 0.0;
   }
 

@@ -33,6 +33,7 @@ class EnergyLeakEngine {
     required MotionPattern pattern,
     required MovementState movementState,
     required String targetArea,
+    bool isSideView = false, // [NEW] 측면 뷰 플래그
   }) {
     final effectiveMuscleScores = <String, double>{};
     final compensationMuscleScores = <String, double>{};
@@ -60,6 +61,7 @@ class EnergyLeakEngine {
         leakedEnergy: leakedEnergy,
         pattern: pattern,
         targetArea: targetArea,
+        isSideView: isSideView, // [권장] 확장성을 위해 전달 (현재는 사용하지 않지만 향후 팔꿈치 벌어짐 등 오판 방지 로직 추가 가능)
       );
 
       effectiveMuscleScores.addAll(upperLeaks['effective'] as Map<String, double>);
@@ -76,6 +78,7 @@ class EnergyLeakEngine {
         effectiveForce: effectiveForce,
         leakedEnergy: leakedEnergy,
         targetArea: targetArea,
+        isSideView: isSideView, // [NEW] 전달
       );
 
       effectiveMuscleScores.addAll(lowerLeaks['effective'] as Map<String, double>);
@@ -217,10 +220,15 @@ class EnergyLeakEngine {
     required double leakedEnergy,
     required MotionPattern pattern,
     required String targetArea,
+    // ignore: unused_element
+    bool isSideView = false, // [NEW] 측면 뷰 플래그 (확장성: 향후 팔꿈치 벌어짐 등 오판 방지 로직 추가 가능)
   }) {
     final effective = <String, double>{};
     final compensation = <String, double>{};
     final jointStress = <String, double>{};
+
+    // TODO: 향후 상체 측면 오판 방지 로직 추가 시 isSideView 활용
+    // 현재는 isSideView를 사용하지 않지만, 향후 확장을 위해 파라미터로 받아둠
 
     // 패턴 기반 가중치 가져오기
     final weights = _getMuscleWeights(pattern, targetArea);
@@ -277,6 +285,7 @@ class EnergyLeakEngine {
     required double effectiveForce,
     required double leakedEnergy,
     required String targetArea,
+    bool isSideView = false, // [NEW] 측면 뷰 플래그
   }) {
     final effective = <String, double>{};
     final compensation = <String, double>{};
@@ -300,20 +309,35 @@ class EnergyLeakEngine {
       });
     }
 
+    // [NEW] 측면 뷰일 때는 Valgus 로직 비활성화
     // 내전근 누수 (Adductor Leak via Valgus)
-    final valgusLeak = totalForce * stability.valgusFactor * 2.0;
+    if (!isSideView && stability.valgusFactor > 0.0) {
+      // 기존 Valgus 로직 유지
+      final valgusLeak = totalForce * stability.valgusFactor * 2.0;
 
-    // 무릎 관절 점수는 valgusLeak만큼 더해준다 (관절 스트레스 증가)
-    jointStress['left_knee'] = valgusLeak * 0.5;
-    jointStress['right_knee'] = valgusLeak * 0.5;
+      // 무릎 관절 점수는 valgusLeak만큼 더해준다 (관절 스트레스 증가)
+      jointStress['left_knee'] = valgusLeak * 0.5;
+      jointStress['right_knee'] = valgusLeak * 0.5;
 
-    // 둔근 점수는 valgusLeak만큼 뺀다 (힘이 내전근으로 샘)
-    if (effective.containsKey('glutes')) {
-      effective['glutes'] = (effective['glutes']! - valgusLeak * 0.5).clamp(0.0, double.infinity);
+      // 둔근 점수는 valgusLeak만큼 뺀다 (힘이 내전근으로 샘)
+      if (effective.containsKey('glutes')) {
+        effective['glutes'] = (effective['glutes']! - valgusLeak * 0.5).clamp(0.0, double.infinity);
+      }
+
+      // 둔근 활성도가 낮은 상태(glutes < 0.3)에서 Valgus가 감지되면 내전근 점수에 1.5배 가중치 적용
+      final glutesScore = effective['glutes'] ?? 0.0;
+      if (glutesScore < 0.3) {
+        final adductorScore = valgusLeak * 1.5;
+        compensation['adductors'] = adductorScore;
+      } else {
+        final adductorScore = valgusLeak;
+        compensation['adductors'] = adductorScore;
+      }
+    } else if (!isSideView) {
+      // Valgus가 감지되지 않으면 내전근 점수 0.0
+      compensation['adductors'] = 0.0;
     }
-
-    // 내전근(Adductors) 점수를 valgusLeak로 설정 (순수 근육명 사용)
-    compensation['adductors'] = valgusLeak;
+    // 측면 뷰일 때는 Valgus 로직을 완전히 스킵 (내전근 점수는 패턴 기반 가중치로만 계산)
 
     // 대퇴사두 보상 (Quad Dominance via Poor Hinge)
     // HIP_DOMINANT 패턴이어야 하는데 무릎이 앞으로 많이 밀리면(Knee Forward),

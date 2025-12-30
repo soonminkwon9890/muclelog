@@ -95,53 +95,90 @@ class AnalysisLog {
        muscleUsage = muscleUsage ?? {};
 
   /// Legacy 데이터를 새 형식으로 변환하는 매핑 함수 (public)
+  /// 표준 키로 매핑하고, 표준 키 목록에 없는 키는 Drop합니다.
   static Map<String, double> convertLegacyToNew(
     Map<String, dynamic> legacyData,
   ) {
     final converted = <String, double>{};
 
-    // Legacy 키 -> New 키 매핑
+    // 표준 키 목록 (Single Source of Truth)
+    final standardKeys = {
+      'trapezius',
+      'latissimus',
+      'erector_spinae',
+      'pectorals',
+      'deltoids',
+      'biceps',
+      'triceps',
+      'quadriceps',
+      'hamstrings',
+      'glutes',
+      'adductors',
+      'calves',
+    };
+
+    // Legacy 키 -> 표준 키 매핑
     final legacyMapping = {
       // 목/승모근
       '목': 'trapezius',
       'neck': 'trapezius',
       '승모근': 'trapezius',
       'trapezius': 'trapezius',
+      'traps': 'trapezius',
       // 등/광배근
-      '등': 'lats',
-      'back': 'lats',
-      '광배근': 'lats',
-      'lats': 'lats',
+      '등': 'latissimus',
+      'back': 'latissimus',
+      '광배근': 'latissimus',
+      'latissimus': 'latissimus',
+      'latissimusdorsi': 'latissimus',
+      'lats': 'latissimus',
       // 가슴/대흉근
-      '가슴': 'pectoralis_mid',
-      'chest': 'pectoralis_mid',
-      '대흉근': 'pectoralis_mid',
-      'pectoralis': 'pectoralis_mid',
+      '가슴': 'pectorals',
+      'chest': 'pectorals',
+      '대흉근': 'pectorals',
+      'pectorals': 'pectorals',
+      'pectoralis': 'pectorals',
+      'pectoralis_mid': 'pectorals',
+      'pecs': 'pectorals',
       // 허리/척추/기립근
       '허리': 'erector_spinae',
       'spine': 'erector_spinae',
       '척추': 'erector_spinae',
       '기립근': 'erector_spinae',
+      'erector_spinae': 'erector_spinae',
       'erector': 'erector_spinae',
+      'erectorspinae': 'erector_spinae',
       // 하체/허벅지/대퇴사두근
-      '하체': 'quads',
-      'leg': 'quads',
-      '허벅지': 'quads',
-      '대퇴사두근': 'quads',
-      'quads': 'quads',
+      '하체': 'quadriceps',
+      'leg': 'quadriceps',
+      '허벅지': 'quadriceps',
+      '대퇴사두근': 'quadriceps',
+      'quadriceps': 'quadriceps',
+      'quad': 'quadriceps',
+      'quads': 'quadriceps',
       // 기타 근육들
-      'shoulder': 'lateral_deltoid',
-      '어깨': 'lateral_deltoid',
-      '삼각근': 'lateral_deltoid',
-      'deltoid': 'lateral_deltoid',
+      'shoulder': 'deltoids',
+      '어깨': 'deltoids',
+      '삼각근': 'deltoids',
+      'deltoids': 'deltoids',
+      'deltoid': 'deltoids',
+      'lateral_deltoid': 'deltoids',
       'hamstrings': 'hamstrings',
+      'hamstring': 'hamstrings',
       '햄스트링': 'hamstrings',
       'glutes': 'glutes',
+      'gluteus': 'glutes',
+      'glute': 'glutes',
       '둔근': 'glutes',
       'biceps': 'biceps',
       '이두근': 'biceps',
       'triceps': 'triceps',
       '삼두근': 'triceps',
+      'adductors': 'adductors',
+      '내전근': 'adductors',
+      'calves': 'calves',
+      'calf': 'calves',
+      '종아리': 'calves',
     };
 
     for (final entry in legacyData.entries) {
@@ -170,6 +207,11 @@ class AnalysisLog {
 
       // 매핑이 없으면 원본 키를 그대로 사용 (이미 새 형식일 수 있음)
       newKey ??= legacyKey;
+
+      // Unknown Keys 처리: 표준 키 목록에 없는 키는 Drop
+      if (!standardKeys.contains(newKey)) {
+        continue; // 표준 키가 아니면 버림
+      }
 
       // 기존 값이 있으면 더 큰 값으로 업데이트
       if (converted.containsKey(newKey)) {
@@ -316,18 +358,43 @@ class AnalysisLog {
           analysisResult['detailed_muscle_usage'] as Map<String, dynamic>?;
       final newBiomechPattern = analysisResult['biomech_pattern']?.toString();
 
-      // muscle_usage가 있으면 detailedMuscleUsage에도 복사
+      // 표준 키 목록 (Unknown Keys 필터링용)
+      final standardKeys = {
+        'trapezius',
+        'latissimus',
+        'erector_spinae',
+        'pectorals',
+        'deltoids',
+        'biceps',
+        'triceps',
+        'quadriceps',
+        'hamstrings',
+        'glutes',
+        'adductors',
+        'calves',
+      };
+
+      // muscle_usage가 있으면 detailedMuscleUsage에도 복사 (표준 키만)
       // 🔧 muscleUsage는 항상 값이 할당되므로 (빈 맵이든 실제 데이터든), 빈 맵 체크만 수행
       if (muscleUsage.isNotEmpty) {
-        detailedMuscleUsage = Map<String, double>.from(muscleUsage);
+        // 표준 키만 필터링하여 복사
+        for (final entry in muscleUsage.entries) {
+          if (standardKeys.contains(entry.key)) {
+            detailedMuscleUsage[entry.key] = entry.value;
+          }
+        }
         biomechPattern = newBiomechPattern ?? 'UNKNOWN';
         debugPrint(
-          '📊 [AnalysisLog] Loaded from muscle_usage: ${detailedMuscleUsage.length} muscles',
+          '📊 [AnalysisLog] Loaded from muscle_usage: ${detailedMuscleUsage.length} muscles (filtered)',
         );
       } else if (newDetailedMuscleUsage != null &&
           newDetailedMuscleUsage.isNotEmpty) {
-        // detailed_muscle_usage가 있으면 사용
+        // detailed_muscle_usage가 있으면 사용 (표준 키만)
         for (final entry in newDetailedMuscleUsage.entries) {
+          // 표준 키만 포함
+          if (!standardKeys.contains(entry.key)) {
+            continue; // 표준 키가 아니면 버림
+          }
           final value = entry.value;
           if (value is num) {
             detailedMuscleUsage[entry.key] = value.toDouble();
@@ -335,7 +402,7 @@ class AnalysisLog {
         }
         biomechPattern = newBiomechPattern ?? 'UNKNOWN';
         debugPrint(
-          '📊 [AnalysisLog] Loaded from New JSONB: ${detailedMuscleUsage.length} muscles',
+          '📊 [AnalysisLog] Loaded from New JSONB: ${detailedMuscleUsage.length} muscles (filtered)',
         );
       } else {
         // Priority 2: Legacy 데이터 변환

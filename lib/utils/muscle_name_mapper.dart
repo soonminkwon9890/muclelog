@@ -1,28 +1,25 @@
 class MuscleNameMapper {
-  // 1. 핵심 단어 사전 (순수 부위명 -> 한글)
+  // 1. 핵심 단어 사전 (표준 키만 포함 -> 한글)
+  // 표준 키: trapezius, latissimus, erector_spinae, pectorals, deltoids, biceps, triceps,
+  //         quadriceps, hamstrings, glutes, adductors, calves
   static const Map<String, String> _dictionary = {
     // [관절]
     'hip': '고관절', 'knee': '무릎', 'ankle': '발목',
     'shoulder': '어깨', 'elbow': '팔꿈치', 'wrist': '손목',
     'neck': '목', 'head': '머리',
-    // [근육 - 하체]
-    'quadriceps': '대퇴사두근', 'quad': '대퇴사두근', 'quads': '대퇴사두근',
-    'hamstrings': '햄스트링', 'hamstring': '햄스트링',
-    'gluteus': '둔근', 'glutes': '둔근', 'glute': '둔근',
-    'calf': '종아리', 'calves': '종아리',
-    // [근육 - 상체]
-    'trapezius': '승모근', 'traps': '승모근',
-    'latissimus': '광배근', 'latissimusdorsi': '광배근', 'lats': '광배근',
-    'erectorspinae': '기립근', 'erector': '기립근', 'spine': '기립근', // 근육 context에선 기립근
-    'pectoralis': '대흉근', 'pectorals': '대흉근', 'pecs': '대흉근', 'chest': '대흉근',
-    'deltoids': '삼각근', 'deltoid': '삼각근',
-    'biceps': '이두근', 'triceps': '삼두근',
-    'core': '코어', 'abs': '복근',
-    // [근육 - 추가]
+    // [근육 - 표준 키만]
+    'trapezius': '승모근',
+    'latissimus': '광배근',
+    'erector_spinae': '기립근',
+    'pectorals': '대흉근',
+    'deltoids': '삼각근',
+    'biceps': '이두근',
+    'triceps': '삼두근',
+    'quadriceps': '대퇴사두근',
+    'hamstrings': '햄스트링',
+    'glutes': '둔근',
     'adductors': '내전근',
-    'abductors': '외전근',
-    'serratus': '전거근',
-    'rhomboids': '능형근',
+    'calves': '종아리',
   };
 
   // 2. 통합 번역 함수
